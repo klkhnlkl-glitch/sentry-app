@@ -370,6 +370,7 @@ async function saveStudent() {
   const name = document.getElementById('stName').value.trim();
   if (!name) { showToast('من فضلك ادخل اسم الطالب'); return; }
   const editId = document.getElementById('editStudentId').value;
+  const existingStudent = editId ? state.students.find(s => s.id === editId) : null;
 
   const data = {
     id: editId || uid(),
@@ -379,7 +380,8 @@ async function saveStudent() {
     code: document.getElementById('stCode').value.trim(),
     groupId: document.getElementById('stGroup').value,
     fee: Number(document.getElementById('stFee').value) || 0,
-    notes: document.getElementById('stNotes').value.trim()
+    notes: document.getElementById('stNotes').value.trim(),
+    createdAt: existingStudent ? (existingStudent.createdAt || Date.now()) : Date.now()
   };
 
   if (editId) {
@@ -535,7 +537,7 @@ async function toggleAttendance(studentId, date) {
     const student = state.students.find(s => s.id === studentId);
     const paid = state.payments.some(p => p.studentId === studentId && (p.month || '').slice(0, 7) === thisMonthStr());
     if (!paid) playWarningSound();
-    const missedLast = wasAbsentLastSession(studentId, date);
+    const missedLast = wasAbsentLastCycle(studentId, date);
     fullScreenFlash(student, paid, missedLast);
   }
   renderAttendanceList();
@@ -597,7 +599,7 @@ async function numConfirm() {
     const cls = paid ? 'flash-ok' : 'flash-err';
     flash.innerHTML = `<div class="${cls}">✅ ${escapeHtml(student.name)} — ${payLabel}</div>`;
     if (!paid) playWarningSound();
-    const missedLast = wasAbsentLastSession(student.id, date);
+    const missedLast = wasAbsentLastCycle(student.id, date);
     fullScreenFlash(student, paid, missedLast);
     renderAttendanceList();
     renderDashboard();
@@ -633,15 +635,73 @@ function playWarningSound() {
   } catch (e) {}
 }
 
-/* Returns true if the student was NOT marked present on the most recent
-   previous attendance date recorded in the system (before `date`). */
-function wasAbsentLastSession(studentId, date) {
-  const prevDates = [...new Set(state.attendance.map(a => a.date))]
-    .filter(d => d < date)
-    .sort();
-  if (prevDates.length === 0) return false;
-  const lastDate = prevDates[prevDates.length - 1];
-  return !state.attendance.some(a => a.studentId === studentId && a.date === lastDate);
+/* =========================================================
+   نظام الحضور بدورتين أسبوعياً (الطالب يحضر مرتين فقط في الأسبوع)
+   - الدورة الأولى: السبت + الأحد + الاتنين
+   - الدورة الثانية: الثلاثاء + الأربعاء + الخميس + الجمعة
+   الطالب يُعتبر "حاضر" في الدورة لو سجّل حضور يوم واحد على الأقل
+   جوه أيامها، ومش لازم يحضر كل أيامها.
+   ========================================================= */
+function parseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+function fmtLocalDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function addDays(d, n) {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
+/* نطاق الدورة الحالية اللي يقع فيها تاريخ معين */
+function getCycleRange(dateStr) {
+  const d = parseLocalDate(dateStr);
+  const dow = d.getDay(); // 0=أحد..6=سبت
+  const backToSat = (dow + 1) % 7;
+  const weekSat = addDays(d, -backToSat);
+  const inCycleA = (dow === 6 || dow === 0 || dow === 1);
+  const start = inCycleA ? weekSat : addDays(weekSat, 3);
+  const end = inCycleA ? addDays(weekSat, 2) : addDays(weekSat, 6);
+  return { cycle: inCycleA ? 'A' : 'B', start: fmtLocalDate(start), end: fmtLocalDate(end) };
+}
+
+/* نطاق الدورة اللي قبل الدورة الحالية مباشرة (المفروض الطالب حضر فيها) */
+function getPrevCycleRange(dateStr) {
+  const d = parseLocalDate(dateStr);
+  const dow = d.getDay();
+  const backToSat = (dow + 1) % 7;
+  const weekSat = addDays(d, -backToSat);
+  const inCycleA = (dow === 6 || dow === 0 || dow === 1);
+
+  let start, end;
+  if (inCycleA) {
+    // الدورة اللي قبلها هي الدورة الثانية بتاعة الأسبوع اللي فات
+    start = addDays(weekSat, -4);
+    end = addDays(weekSat, -1);
+  } else {
+    // الدورة اللي قبلها هي الدورة الأولى بتاعة نفس الأسبوع
+    start = weekSat;
+    end = addDays(weekSat, 2);
+  }
+  return { start: fmtLocalDate(start), end: fmtLocalDate(end) };
+}
+
+/* true لو الطالب فوّت كل الدورة اللي قبل تاريخ الحضور الحالي بالكامل */
+function wasAbsentLastCycle(studentId, date) {
+  const { start, end } = getPrevCycleRange(date);
+  const student = state.students.find(s => s.id === studentId);
+  // لو الطالب اتسجل بعد ما الدورة اللي فاتت خلصت، مش عادل نعتبره غايب فيها
+  if (student && student.createdAt) {
+    const endDate = parseLocalDate(end);
+    endDate.setHours(23, 59, 59, 999);
+    if (student.createdAt > endDate.getTime()) return false;
+  }
+  return !state.attendance.some(a => a.studentId === studentId && a.date >= start && a.date <= end);
 }
 
 function fullScreenFlash(student, paid, missedLast) {
@@ -668,7 +728,7 @@ function fullScreenFlash(student, paid, missedLast) {
 
   if (missedLast) {
     warn.style.display = 'inline-block';
-    warn.textContent = '⚠️ ملحوظة: الطالب كان غايب الحصة اللي فاتت';
+    warn.textContent = '⚠️ ملحوظة: الطالب غايب عن الدورة اللي فاتت';
   } else {
     warn.style.display = 'none';
   }
@@ -1117,7 +1177,8 @@ async function importCSV() {
       code: nextStudentCode(),
       groupId,
       fee: 0,
-      notes: ''
+      notes: '',
+      createdAt: Date.now()
     };
     state.students.push(data);
     await putItem('students', data);
@@ -1183,11 +1244,17 @@ function fillTemplate(tpl, s) {
   return tpl.replace(/\{name\}/g, s.name || '').replace(/\{code\}/g, s.code || '');
 }
 
+/* بتاخد الرقم بأي صيغة وترجّعه بصيغة واتساب الصح (+20xxxxxxxxxx)
+   المنطق: شيل كل حاجة غير أرقام، خد آخر 10 أرقام من اليمين (الأرقام
+   الفعلية بدون أي صفر أو كود دولة)، وحط +20 قدامهم.
+   ده بيحل مشكلة الإكسل اللي بيشيل الصفر الأول (01012345678→1012345678)
+   وكمان لو حد سجل الرقم بـ 00201x أو 2010x أو +201x كلها هتتحول صح */
 function normalizePhone(phone) {
   if (!phone) return null;
-  let p = phone.replace(/[^\d]/g, '');
-  if (p.startsWith('0')) p = '2' + p; // Egypt country code
-  return p;
+  const digits = String(phone).replace(/\D/g, '');
+  if (!digits || digits.length < 9) return null;
+  const last10 = digits.slice(-10);
+  return '20' + last10;
 }
 
 function whatsappStudent(studentId) {
