@@ -377,13 +377,33 @@ body{padding-bottom:80px;}
       <button class="btn outline" onclick="openPaymentModal()">💵 تسجيل دفعة</button>
     </div>
   </div>
+
+  <div class="card">
+    <h3><span class="dot"></span> الرسائل التلقائية</h3>
+    <p style="color:var(--muted); font-size:12px; margin:0 0 10px;">
+      ده النص اللي بيتبعت تلقائي على واتساب. تقدر تعدله براحتك، واستخدم
+      <b>{name}</b> لاسم الطالب و <b>{code}</b> لكود الطالب وهيتبدلوا تلقائي.
+    </p>
+
+    <div class="field">
+      <label>رسالة كود الطالب:</label>
+      <textarea id="tplStudentCode" rows="3"></textarea>
+    </div>
+
+    <div class="field">
+      <label>رسالة غياب لولي الأمر:</label>
+      <textarea id="tplParentAbsent" rows="3"></textarea>
+    </div>
+
+    <button class="btn green block" onclick="saveMessageTemplates()">💾 حفظ الرسائل</button>
+  </div>
 </div>
 
 <!-- ===================== STUDENTS ===================== -->
 <div class="page" id="page-students">
   <div class="searchbar">
     <span>🔍</span>
-    <input type="text" id="studentSearch" placeholder="بحث بالاسم أو الكود..." oninput="renderStudents()">
+    <input type="text" id="studentSearch" placeholder="بحث بالاسم أو الكود أو رقم التليفون..." oninput="renderStudents()">
   </div>
   <div id="groupFilters" style="margin-bottom:10px;"></div>
   <div class="card" id="studentsListCard">
@@ -536,6 +556,15 @@ body{padding-bottom:80px;}
     <button class="btn block" style="background: var(--paper2); color: var(--ink); border: 1px solid var(--line);" onclick="document.getElementById('importBackupInput').click()">
       📤 رفع ملف النسخة الاحتياطية واستعادتها
     </button>
+
+    <hr class="sep">
+    <h3 style="color:#ff5c5c;">⚠️ منطقة خطر</h3>
+    <p style="color: var(--muted); font-size: 12px; margin-bottom: 10px;">
+      هذا الإجراء يمسح كل بيانات النظام نهائياً من هذا الجهاز. لا تستخدمه إلا بعد التأكد من تحميل نسخة احتياطية.
+    </p>
+    <button class="btn block" style="background: #ff5c5c; color: #fff;" onclick="resetAllData()">
+      🗑️ مسح كل البيانات نهائياً
+    </button>
   </div>
 </div>
 
@@ -597,9 +626,13 @@ body{padding-bottom:80px;}
         <div class="li-sub">المجموعة</div><div id="sdGroup" style="font-weight:700;">—</div>
       </div>
     </div>
-    <div class="row2" style="margin-top:10px;">
+    <div style="display:flex; gap:10px; margin-top:10px;">
       <button class="btn green block" onclick="whatsappStudent(currentDetailId)">💬 واتساب الطالب</button>
+      <button class="btn outline" style="flex:0 0 50px; font-size:19px;" onclick="callStudent(currentDetailId)" title="اتصال بالطالب">📞</button>
+    </div>
+    <div style="display:flex; gap:10px; margin-top:10px;">
       <button class="btn green block" onclick="whatsappParentAbsent(currentDetailId)">💬 واتساب ولي الأمر (غياب)</button>
+      <button class="btn outline" style="flex:0 0 50px; font-size:19px;" onclick="callParent(currentDetailId)" title="اتصال بولي الأمر">📞</button>
     </div>
     <div style="display:flex; gap:10px; margin-top:10px;">
       <button class="btn outline block" onclick="editFromDetail()">✏️ تعديل البيانات</button>

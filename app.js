@@ -40,6 +40,38 @@ function openDB() {
   });
 }
 
+/* مسح شامل لكل بيانات النظام - بتأكيد مزدوج لمنع أي حذف بالغلط
+   لأن العملية دي نهائية ومش قابلة للتراجع */
+async function resetAllData() {
+  const ok1 = window.confirm(
+    'تحذير: هذا الإجراء سيمسح كل بيانات النظام نهائياً (الطلاب، الحضور، الدفعات، الكويزات، كل شيء).\n\n' +
+    'لا يمكن التراجع عن هذه الخطوة. هل أخذت نسخة احتياطية بالفعل؟\n\n' +
+    'اضغط "موافق" فقط لو متأكد ومعاك نسخة احتياطية محفوظة.'
+  );
+  if (!ok1) return;
+
+  const confirmText = window.prompt('للتأكيد النهائي، اكتب كلمة "مسح" بالعربي في الخانة دي ثم اضغط موافق:');
+  if (confirmText !== 'مسح') {
+    showToast('تم إلغاء العملية - لم يتم مسح أي شيء');
+    return;
+  }
+
+  const stores = ['students','groups','attendance','payments','expenses','quizzes','questions','results'];
+  try {
+    await Promise.all(stores.map(name => new Promise((resolve, reject) => {
+      const tx = db.transaction(name, 'readwrite');
+      tx.objectStore(name).clear();
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    })));
+    try { localStorage.removeItem('sentry_last_backup'); } catch(e) {}
+    showToast('تم مسح كل البيانات بنجاح');
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) {
+    showToast('⚠️ حدث خطأ أثناء المسح - حاول مرة أخرى');
+  }
+}
+
 function txStore(name, mode='readonly') {
   return db.transaction(name, mode).objectStore(name);
 }
@@ -227,7 +259,12 @@ function renderStudents() {
   const search = document.getElementById('studentSearch').value.trim().toLowerCase();
   let list = state.students.slice();
   if (activeGroupFilter !== 'all') list = list.filter(s => s.groupId === activeGroupFilter);
-  if (search) list = list.filter(s => s.name.toLowerCase().includes(search) || (s.code||'').toLowerCase().includes(search));
+  if (search) list = list.filter(s =>
+    s.name.toLowerCase().includes(search) ||
+    (s.code||'').toLowerCase().includes(search) ||
+    (s.phone||'').includes(search) ||
+    (s.parentPhone||'').includes(search)
+  );
 
   const box = document.getElementById('studentsList');
   if (list.length === 0) {
@@ -1094,6 +1131,58 @@ async function importCSV() {
 }
 
 
+function callStudent(studentId) {
+  const s = state.students.find(x => x.id === studentId);
+  if (!s) return;
+  if (!s.phone) { showToast('لا يوجد رقم موبايل للطالب'); return; }
+  window.location.href = `tel:${s.phone}`;
+}
+
+function callParent(studentId) {
+  const s = state.students.find(x => x.id === studentId);
+  if (!s) return;
+  if (!s.parentPhone) { showToast('لا يوجد رقم ولي أمر مسجل'); return; }
+  window.location.href = `tel:${s.parentPhone}`;
+}
+
+/* ---------------- قوالب الرسائل التلقائية (قابلة للتعديل) ---------------- */
+const DEFAULT_TEMPLATES = {
+  studentCode: 'كودك هو ({code})\nمع تحيات eng.MohamedAshraf',
+  parentAbsent: 'الطالب/ {name} المسجل لم يحضر اليوم'
+};
+
+function getMessageTemplates() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('sentry_msg_templates') || '{}');
+    return { ...DEFAULT_TEMPLATES, ...saved };
+  } catch (e) {
+    return { ...DEFAULT_TEMPLATES };
+  }
+}
+
+function loadMessageTemplatesUI() {
+  const t = getMessageTemplates();
+  const a = document.getElementById('tplStudentCode');
+  const b = document.getElementById('tplParentAbsent');
+  if (a) a.value = t.studentCode;
+  if (b) b.value = t.parentAbsent;
+}
+
+function saveMessageTemplates() {
+  const studentCode = document.getElementById('tplStudentCode').value.trim() || DEFAULT_TEMPLATES.studentCode;
+  const parentAbsent = document.getElementById('tplParentAbsent').value.trim() || DEFAULT_TEMPLATES.parentAbsent;
+  try {
+    localStorage.setItem('sentry_msg_templates', JSON.stringify({ studentCode, parentAbsent }));
+    showToast('تم حفظ الرسائل بنجاح');
+  } catch (e) {
+    showToast('⚠️ فشل حفظ الرسائل');
+  }
+}
+
+function fillTemplate(tpl, s) {
+  return tpl.replace(/\{name\}/g, s.name || '').replace(/\{code\}/g, s.code || '');
+}
+
 function normalizePhone(phone) {
   if (!phone) return null;
   let p = phone.replace(/[^\d]/g, '');
@@ -1106,7 +1195,7 @@ function whatsappStudent(studentId) {
   if (!s) return;
   const phone = normalizePhone(s.phone);
   if (!phone) { showToast('لا يوجد رقم موبايل للطالب'); return; }
-  const msg = `كودك هو (${s.code})\nمع تحيات eng.MohamedAshraf`;
+  const msg = fillTemplate(getMessageTemplates().studentCode, s);
   window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 
@@ -1115,7 +1204,7 @@ function whatsappParentAbsent(studentId) {
   if (!s) return;
   const phone = normalizePhone(s.parentPhone);
   if (!phone) { showToast('لا يوجد رقم ولي أمر مسجل'); return; }
-  const msg = `الطالب/ ${s.name} المسجل لم يحضر اليوم`;
+  const msg = fillTemplate(getMessageTemplates().parentAbsent, s);
   window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 
@@ -1151,15 +1240,50 @@ window.addEventListener('load', async () => {
   wireExpenseButton();
   renderDashboard();
   renderAttendancePage();
+  loadMessageTemplatesUI();
 
   document.getElementById('todayDate').textContent = new Date().toLocaleDateString('ar-EG', {weekday:'long', year:'numeric', month:'long', day:'numeric'});
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(()=>{});
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      // لو فيه نسخة جديدة شغالة بالفعل وعندها التحكم، يبقى لازم نعرض البانر
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateBanner();
+          }
+        });
+      });
+    }).catch(()=>{});
   }
 
   setTimeout(checkBackupReminder, 2500);
 });
+
+/* بانر بسيط يظهر لما تتحدث ملفات التطبيق (ميزة جديدة / تعديل) على
+   السيرفر، عشان المستخدم يعرف إن فيه نسخة أحدث ويحدّث براحته بدون
+   أي تأثير على البيانات المخزنة (البيانات في IndexedDB منفصلة تماماً
+   عن ملفات الكود ومحدش يلمسها أبداً عند التحديث) */
+function showUpdateBanner() {
+  if (document.getElementById('updateBanner')) return;
+  const div = document.createElement('div');
+  div.id = 'updateBanner';
+  div.style.cssText = `
+    position:fixed; bottom:14px; left:14px; right:14px; z-index:9999;
+    background:linear-gradient(135deg, var(--blue), var(--purple));
+    color:#fff; padding:13px 16px; border-radius:14px;
+    box-shadow:var(--shadow); display:flex; align-items:center;
+    justify-content:space-between; gap:10px; font-size:13px;
+  `;
+  div.innerHTML = `
+    <span>🔄 يوجد تحديث جديد للنظام</span>
+    <button style="background:#fff; color:var(--navy); border:none; border-radius:8px; padding:7px 12px; font-weight:700; font-size:12px;">تحديث الآن</button>
+  `;
+  div.querySelector('button').onclick = () => location.reload();
+  document.body.appendChild(div);
+}
 
 /* =========================================================
    EXPORT ENGINE — Excel (.xlsx) + Printable PDF
