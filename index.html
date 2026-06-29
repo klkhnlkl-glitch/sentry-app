@@ -629,10 +629,12 @@ body{padding-bottom:80px;}
     <div style="display:flex; gap:10px; margin-top:10px;">
       <button class="btn green block" onclick="whatsappStudent(currentDetailId)">💬 واتساب الطالب</button>
       <button class="btn outline" style="flex:0 0 50px; font-size:19px;" onclick="callStudent(currentDetailId)" title="اتصال بالطالب">📞</button>
+      <button class="btn outline" style="flex:0 0 50px; font-size:19px;" onclick="saveContact(currentDetailId,'student')" title="حفظ رقم الطالب في التليفون">📇</button>
     </div>
     <div style="display:flex; gap:10px; margin-top:10px;">
       <button class="btn green block" onclick="whatsappParentAbsent(currentDetailId)">💬 واتساب ولي الأمر (غياب)</button>
       <button class="btn outline" style="flex:0 0 50px; font-size:19px;" onclick="callParent(currentDetailId)" title="اتصال بولي الأمر">📞</button>
+      <button class="btn outline" style="flex:0 0 50px; font-size:19px;" onclick="saveContact(currentDetailId,'parent')" title="حفظ رقم ولي الأمر في التليفون">📇</button>
     </div>
     <div style="display:flex; gap:10px; margin-top:10px;">
       <button class="btn outline block" onclick="editFromDetail()">✏️ تعديل البيانات</button>

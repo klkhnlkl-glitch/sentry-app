@@ -1192,18 +1192,61 @@ async function importCSV() {
 }
 
 
+/* بتحوّل الرقم لصيغة اتصال محلي مصري: 0 + آخر 10 أرقام */
+function normalizePhoneLocal(phone) {
+  if (!phone) return null;
+  const digits = String(phone).replace(/\D/g, '');
+  if (!digits || digits.length < 9) return null;
+  return '0' + digits.slice(-10);
+}
+
 function callStudent(studentId) {
   const s = state.students.find(x => x.id === studentId);
   if (!s) return;
-  if (!s.phone) { showToast('لا يوجد رقم موبايل للطالب'); return; }
-  window.location.href = `tel:${s.phone}`;
+  const phone = normalizePhoneLocal(s.phone);
+  if (!phone) { showToast('لا يوجد رقم موبايل للطالب'); return; }
+  window.location.href = `tel:${phone}`;
 }
 
 function callParent(studentId) {
   const s = state.students.find(x => x.id === studentId);
   if (!s) return;
-  if (!s.parentPhone) { showToast('لا يوجد رقم ولي أمر مسجل'); return; }
-  window.location.href = `tel:${s.parentPhone}`;
+  const phone = normalizePhoneLocal(s.parentPhone);
+  if (!phone) { showToast('لا يوجد رقم ولي أمر مسجل'); return; }
+  window.location.href = `tel:${phone}`;
+}
+
+/* حفظ جهة اتصال في تليفون المستخدم عبر vCard */
+function saveContact(studentId, type) {
+  const s = state.students.find(x => x.id === studentId);
+  if (!s) return;
+  const isParent = type === 'parent';
+  const rawPhone = isParent ? s.parentPhone : s.phone;
+  const phone = normalizePhoneLocal(rawPhone);
+  if (!phone) {
+    showToast(isParent ? 'لا يوجد رقم ولي أمر' : 'لا يوجد رقم للطالب');
+    return;
+  }
+  const name = isParent
+    ? `ولي أمر ${s.name || ''} [${s.code || ''}]`
+    : `${s.name || ''} [${s.code || ''}]`;
+  const vcard = [
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    `FN:${name}`,
+    `TEL;TYPE=CELL:${phone}`,
+    'END:VCARD'
+  ].join('\r\n');
+  const blob = new Blob([vcard], { type: 'text/vcard' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${name}.vcf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`📇 تم تحميل جهة الاتصال: ${name}`);
 }
 
 /* ---------------- قوالب الرسائل التلقائية (قابلة للتعديل) ---------------- */
