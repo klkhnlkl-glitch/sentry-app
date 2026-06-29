@@ -346,11 +346,14 @@ function openStudentModal(studentId = null) {
   document.getElementById('editStudentId').value = studentId || '';
   document.getElementById('delStudentBtn').style.display = studentId ? 'inline-flex' : 'none';
 
+  const defaultFees = getDefaultFees();
+
   if (studentId) {
     const s = state.students.find(x => x.id === studentId);
     document.getElementById('stName').value = s.name;
     document.getElementById('stPhone').value = s.phone || '';
     document.getElementById('stParentPhone').value = s.parentPhone || '';
+    document.getElementById('stParentPhone2').value = s.parentPhone2 || '';
     document.getElementById('stCode').value = s.code;
     document.getElementById('stGroup').value = s.groupId;
     document.getElementById('stFee').value = s.fee || '';
@@ -359,8 +362,9 @@ function openStudentModal(studentId = null) {
     document.getElementById('stName').value = '';
     document.getElementById('stPhone').value = '';
     document.getElementById('stParentPhone').value = '';
+    document.getElementById('stParentPhone2').value = '';
     document.getElementById('stCode').value = nextStudentCode();
-    document.getElementById('stFee').value = '';
+    document.getElementById('stFee').value = defaultFees.old || 300;
     document.getElementById('stNotes').value = '';
   }
   openModal('studentModal');
@@ -377,6 +381,7 @@ async function saveStudent() {
     name,
     phone: document.getElementById('stPhone').value.trim(),
     parentPhone: document.getElementById('stParentPhone').value.trim(),
+    parentPhone2: document.getElementById('stParentPhone2').value.trim(),
     code: document.getElementById('stCode').value.trim(),
     groupId: document.getElementById('stGroup').value,
     fee: Number(document.getElementById('stFee').value) || 0,
@@ -420,6 +425,10 @@ function openStudentDetail(id) {
   document.getElementById('sdPhone').textContent = s.phone || '-';
   const g = state.groups.find(g => g.id === s.groupId);
   document.getElementById('sdGroup').textContent = g ? g.name : '-';
+
+  // إظهار صف ولي الأمر الثاني لو في رقم
+  const p2Row = document.getElementById('sdParent2Row');
+  if (p2Row) p2Row.style.display = s.parentPhone2 ? 'flex' : 'none';
 
   document.getElementById('sdQrWrap').innerHTML = `<div class="qr-box" style="max-width:180px;"><canvas id="sdQrCanvas"></canvas></div>`;
   drawQR(s.code, document.getElementById('sdQrCanvas'));
@@ -1192,7 +1201,28 @@ async function importCSV() {
 }
 
 
-/* بتحوّل الرقم لصيغة اتصال محلي مصري: 0 + آخر 10 أرقام */
+/* ---- إعدادات الأسعار الافتراضية ---- */
+function getDefaultFees() {
+  try {
+    return JSON.parse(localStorage.getItem('sentry_default_fees') || '{}');
+  } catch(e) { return {}; }
+}
+
+function saveDefaultFees() {
+  const oldFee = Number(document.getElementById('defaultFeeOld').value) || 300;
+  const newFee = Number(document.getElementById('defaultFeeNew').value) || 300;
+  localStorage.setItem('sentry_default_fees', JSON.stringify({ old: oldFee, new: newFee }));
+  showToast('✅ تم حفظ الأسعار الافتراضية');
+}
+
+function loadDefaultFeesUI() {
+  const f = getDefaultFees();
+  const elOld = document.getElementById('defaultFeeOld');
+  const elNew = document.getElementById('defaultFeeNew');
+  if (elOld) elOld.value = f.old || 300;
+  if (elNew) elNew.value = f.new || 300;
+}
+
 function normalizePhoneLocal(phone) {
   if (!phone) return null;
   const digits = String(phone).replace(/\D/g, '');
@@ -1216,20 +1246,31 @@ function callParent(studentId) {
   window.location.href = `tel:${phone}`;
 }
 
+function callParent2(studentId) {
+  const s = state.students.find(x => x.id === studentId);
+  if (!s) return;
+  const phone = normalizePhoneLocal(s.parentPhone2);
+  if (!phone) { showToast('لا يوجد رقم ولي أمر ثاني'); return; }
+  window.location.href = `tel:${phone}`;
+}
+
 /* حفظ جهة اتصال في تليفون المستخدم عبر vCard */
 function saveContact(studentId, type) {
   const s = state.students.find(x => x.id === studentId);
   if (!s) return;
   const isParent = type === 'parent';
-  const rawPhone = isParent ? s.parentPhone : s.phone;
+  const isParent2 = type === 'parent2';
+  const rawPhone = isParent2 ? s.parentPhone2 : isParent ? s.parentPhone : s.phone;
   const phone = normalizePhoneLocal(rawPhone);
   if (!phone) {
-    showToast(isParent ? 'لا يوجد رقم ولي أمر' : 'لا يوجد رقم للطالب');
+    showToast(isParent2 ? 'لا يوجد رقم ولي أمر ثاني' : isParent ? 'لا يوجد رقم ولي أمر' : 'لا يوجد رقم للطالب');
     return;
   }
-  const name = isParent
-    ? `ولي أمر ${s.name || ''} [${s.code || ''}]`
-    : `${s.name || ''} [${s.code || ''}]`;
+  const name = isParent2
+    ? `ولي أمر2 ${s.name || ''} [${s.code || ''}]`
+    : isParent
+      ? `ولي أمر ${s.name || ''} [${s.code || ''}]`
+      : `${s.name || ''} [${s.code || ''}]`;
   const vcard = [
     'BEGIN:VCARD',
     'VERSION:3.0',
@@ -1351,6 +1392,7 @@ window.addEventListener('load', async () => {
   renderDashboard();
   renderAttendancePage();
   loadMessageTemplatesUI();
+  loadDefaultFeesUI();
 
   document.getElementById('todayDate').textContent = new Date().toLocaleDateString('ar-EG', {weekday:'long', year:'numeric', month:'long', day:'numeric'});
 
