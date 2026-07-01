@@ -334,6 +334,19 @@ body{padding-bottom:80px;}
 </head>
 <body>
 
+<!-- Lock screen: password gate -->
+<div id="lockScreen" style="display:none; position:fixed; inset:0; z-index:99999; background:linear-gradient(160deg,var(--navy) 0%, var(--cream) 100%); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px;">
+  <div style="width:100%; max-width:340px; text-align:center;">
+    <div style="width:64px; height:64px; border-radius:18px; background:linear-gradient(135deg,var(--blue),var(--purple)); display:flex; align-items:center; justify-content:center; font-size:30px; margin:0 auto 18px; box-shadow:var(--shadow);">🔒</div>
+    <h2 id="lockTitle" style="color:var(--ink); margin:0 0 6px; font-size:20px;">أدخل كلمة المرور</h2>
+    <p id="lockSubtitle" style="color:var(--muted); font-size:13px; margin:0 0 20px;">للدخول إلى السنتري</p>
+    <input type="password" id="lockPasswordInput" placeholder="كلمة المرور" style="width:100%; padding:14px; border-radius:12px; border:1.5px solid var(--line); background:var(--paper); color:var(--ink); font-size:16px; text-align:center; font-family:inherit; margin-bottom:10px;" autocomplete="off">
+    <input type="password" id="lockPasswordConfirm" placeholder="تأكيد كلمة المرور" style="display:none; width:100%; padding:14px; border-radius:12px; border:1.5px solid var(--line); background:var(--paper); color:var(--ink); font-size:16px; text-align:center; font-family:inherit; margin-bottom:10px;" autocomplete="off">
+    <div id="lockError" style="color:var(--red); font-size:13px; min-height:18px; margin-bottom:10px;"></div>
+    <button class="btn gold block" onclick="lockScreenSubmit()" style="padding:14px;">دخول</button>
+  </div>
+</div>
+
 <!-- Full-screen attendance result overlay -->
 <div id="fullFlash">
   <div class="ff-icon" id="ffIcon"></div>
@@ -524,38 +537,21 @@ body{padding-bottom:80px;}
     <div id="quizzesList"></div>
   </div>
   <div class="card" id="quizDetailCard" style="display:none;">
-    <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
-      <h3 style="margin:0; flex:1;"><span class="dot"></span> <span id="quizDetailTitle"></span><span id="quizDetailTotal" style="color:var(--muted); font-size:14px;"></span></h3>
-      <button onclick="openExportPanel('quizzes')" style="background:linear-gradient(135deg,var(--blue),var(--purple)); color:#fff; border:none; border-radius:9px; padding:6px 12px; font-size:12px; font-weight:700; font-family:inherit; cursor:pointer;">📤 تصدير</button>
-    </div>
-    <div style="font-size:13px; font-weight:600; color:var(--muted); margin-bottom:8px;">📝 رصد درجات الطلاب</div>
-    <div id="bulkGradeEntryBox"></div>
+    <h3><span class="dot"></span> <span id="quizDetailTitle"></span>
+      <button onclick="openExportPanel('quizzes')" style="margin-right:auto; background:linear-gradient(135deg,var(--blue),var(--purple)); color:#fff; border:none; border-radius:9px; padding:6px 12px; font-size:12px; font-weight:700; font-family:inherit; cursor:pointer;">📤 تصدير</button>
+    </h3>
+    <div id="quizQuestions"></div>
+    <button class="btn outline block" onclick="openQuestionModal(currentQuizId)">➕ إضافة سؤال</button>
     <hr class="sep">
-    <h3><span class="dot"></span> ترتيب النتائج</h3>
+    <h3><span class="dot"></span> تسجيل نتيجة طالب</h3>
+    <div class="row2">
+      <select id="quizResultStudent"></select>
+      <input type="number" id="quizResultScore" placeholder="الدرجة" min="0">
+    </div>
+    <button class="btn gold block" style="margin-top:8px;" onclick="saveQuizResult()">حفظ النتيجة</button>
+    <hr class="sep">
+    <h3><span class="dot"></span> نتائج الطلاب</h3>
     <div id="quizResultsList"></div>
-  </div>
-</div>
-
-<!-- ===================== FOLLOW-UP PAGE ===================== -->
-<div class="page" id="page-followup">
-  <div class="card">
-    <h3><span class="dot"></span> المتابعة — اختر طالب</h3>
-    <div id="followupStudentList"></div>
-  </div>
-  <div class="card" id="followupDetailBox" style="display:none;">
-    <h3><span class="dot"></span> تقرير: <span id="followupStudentName"></span></h3>
-    <input type="hidden" id="followupStudentId">
-    <div id="followupDetailContent"></div>
-    <hr class="sep">
-    <div class="field" style="margin-bottom:10px;">
-      <label style="font-size:12px; color:var(--muted);">رسالة ختامية (اختيارية)</label>
-      <textarea id="followupClosingMsg" rows="2" placeholder="مثال: نتمنى التوفيق والنجاح لطفلكم 🌟"
-        style="width:100%; padding:10px; border-radius:10px; border:1.5px solid var(--line); background:var(--paper); color:var(--ink); font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
-    </div>
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-      <button class="btn gold block" onclick="printFollowupPDF()">🖨️ PDF / طباعة</button>
-      <button class="btn block" style="background:var(--green); color:#fff;" onclick="sendFollowupWhatsApp()">💬 WhatsApp ولي الأمر</button>
-    </div>
   </div>
 </div>
 
@@ -575,6 +571,12 @@ body{padding-bottom:80px;}
       </div>
     </div>
     <button class="btn gold block" onclick="saveDefaultFees()">💾 حفظ الأسعار</button>
+  </div>
+
+  <div class="card" style="padding: 15px;">
+    <h3>🔒 كلمة مرور الدخول</h3>
+    <p style="color:var(--muted); font-size:12px; margin:0 0 10px;">تقدر تغيّر كلمة المرور المطلوبة لفتح التطبيق.</p>
+    <button class="btn outline block" onclick="openChangePasswordFlow()">🔑 تغيير كلمة المرور</button>
   </div>
 
   <div class="card" style="padding: 15px;">
@@ -613,8 +615,7 @@ body{padding-bottom:80px;}
   <button class="drawer-item active" onclick="goPage('attendance')" id="nav-attendance"><span class="ic">✅</span>الحضور</button>
   <button class="drawer-item" onclick="goPage('payments')" id="nav-payments"><span class="ic">💰</span>الدفعات</button>
   <button class="drawer-item" onclick="goPage('students')" id="nav-students"><span class="ic">👥</span>الطلاب</button>
-  <button class="drawer-item" onclick="goPage('quizzes')" id="nav-quizzes"><span class="ic">📝</span>الاختبارات</button>
-  <button class="drawer-item" onclick="goPage('followup')" id="nav-followup"><span class="ic">📋</span>المتابعة</button>
+  <button class="drawer-item" onclick="goPage('quizzes')" id="nav-quizzes"><span class="ic">📝</span>كويزات</button>
   <button class="drawer-item" onclick="goPage('home')" id="nav-home"><span class="ic">🏠</span>الرئيسية والتقارير</button>
   <button class="drawer-item" onclick="goPage('settings')" id="nav-settings"><span class="ic">⚙️</span>اعدادات النسخ الاحتياطي</button>
 </div>
@@ -722,8 +723,7 @@ body{padding-bottom:80px;}
 <div class="overlay" id="quizModal">
   <div class="modal">
     <div class="modal-head"><h3>اختبار جديد</h3><button class="close-x" onclick="closeModal('quizModal')">✕</button></div>
-    <div class="field"><label>عنوان الاختبار</label><input type="text" id="quizTitle" placeholder="مثال: كويز الفصل الثاني">
-    <input type="number" id="quizTotalScore" placeholder="الدرجة الكاملة (اختياري)" style="width:100%; padding:12px; border-radius:10px; border:1.5px solid var(--line); background:var(--paper); color:var(--ink); font-size:15px; font-family:inherit; margin-top:8px; box-sizing:border-box;"></div>
+    <div class="field"><label>عنوان الاختبار</label><input type="text" id="quizTitle" placeholder="مثال: كويز الفصل الثاني"></div>
     <button class="btn gold block" onclick="saveQuiz()">حفظ الاختبار</button>
   </div>
 </div>
