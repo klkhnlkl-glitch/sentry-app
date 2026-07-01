@@ -1353,7 +1353,7 @@ function sendFollowupWhatsApp() {
   }).join('\n');
 
   const closingMsg = document.getElementById('followupClosingMsg').value.trim() ||
-    'نتمنى التوفيق والنجاح لمهندسكم🌟';
+    'نتمنى التوفيق والنجاح لطفلكم 🌟';
 
   const msg = `السلام عليكم ورحمة الله،
 ولي أمر الطالب: ${s.name}
@@ -1364,13 +1364,12 @@ ${attLines || 'لا يوجد حضور مسجل'}
 📊 *الدرجات*:
 ${gradeLines || 'لا توجد درجات مسجلة'}
 
-💰 *الدفع*:
-${payLines || 'لا توجد سجلات دفع مسجلة'}
+💰 *الدفعات*:
+${payLines || 'لا توجد دفعات مسجلة'}
 
 ${closingMsg}
 
-— مع تحيات Eng.MohamedAshraf
-نتمنى التوفيق والنجاح لمهندسكم🌟`;
+— سنتري، نظام إدارة السنتر`;
 
   window.open(`https://wa.me/${parentPhone}?text=${encodeURIComponent(msg)}`, '_blank');
 }
@@ -1430,12 +1429,12 @@ function printFollowupPDF() {
   <table><thead><tr><th>الامتحان</th><th style="text-align:center;">الدرجة</th></tr></thead>
   <tbody>${quizRows || '<tr><td colspan="2" style="text-align:center; color:#888;">لا توجد درجات</td></tr>'}</tbody></table>
 
-  <h2>💰 سجل الدفع</h2>
+  <h2>💰 سجل الدفعات</h2>
   <table><thead><tr><th>الشهر</th><th style="text-align:center;">تاريخ الدفع</th><th style="text-align:center;">المبلغ</th></tr></thead>
   <tbody>${payRows || '<tr><td colspan="3" style="text-align:center; color:#888;">لا توجد دفعات</td></tr>'}</tbody></table>
 
   <div class="closing">${closingMsg}</div>
-  <div class="footer">Eng.Mohamed Ashraf/n 01020614529-01158668841</div>
+  <div class="footer">صادر من سنتري — نظام إدارة السنتر</div>
   <script>window.onload=()=>{ window.print(); }<\/script>
   </body></html>`;
 
@@ -1632,8 +1631,8 @@ function saveContact(studentId, type) {
 
 /* ---------------- قوالب الرسائل التلقائية (قابلة للتعديل) ---------------- */
 const DEFAULT_TEMPLATES = {
-  studentCode: 'كودك هو ({code})\nمع تحياتEng.MohamedAshraf',
-  parentAbsent: 'الطالب/ {name} المسجل لم يحضر اليوم n\ مع تحياتEng.MohamedAshraf'
+  studentCode: 'كودك هو ({code})\nمع تحيات eng.MohamedAshraf',
+  parentAbsent: 'الطالب/ {name} المسجل لم يحضر اليوم'
 };
 
 function getMessageTemplates() {
