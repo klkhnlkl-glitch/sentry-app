@@ -141,6 +141,7 @@ function goPage(name) {
   if (name === 'attendance') renderAttendancePage();
   if (name === 'payments') renderPayments();
   if (name === 'quizzes') renderQuizzes();
+  if (name === 'followup') renderFollowupPage();
 
   if (name !== 'attendance') numpadValue = '', updateNumDisplay();
   closeDrawer();
@@ -430,19 +431,27 @@ function openStudentDetail(id) {
   const p2Row = document.getElementById('sdParent2Row');
   if (p2Row) p2Row.style.display = s.parentPhone2 ? 'flex' : 'none';
 
-  document.getElementById('sdQrWrap').innerHTML = `<div class="qr-box" style="max-width:180px;"><canvas id="sdQrCanvas"></canvas></div>`;
-  drawQR(s.code, document.getElementById('sdQrCanvas'));
-
-  const att = state.attendance.filter(a => a.studentId === id).slice().reverse().slice(0,10);
-  const box = document.getElementById('sdAttendance');
-  if (att.length === 0) {
-    box.innerHTML = `<div class="empty"><div class="ic">📋</div><p>لا يوجد سجل حضور</p></div>`;
-  } else {
-    box.innerHTML = att.map(a => {
-      const d = new Date(a.time);
-      return `<div class="list-item"><div class="li-name">${d.toLocaleDateString('ar-EG')}</div><div class="li-sub">${d.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})}</div></div>`;
-    }).join('');
+  // حالة الدفع ومعاد آخر دفعة
+  const month = thisMonthStr();
+  const payThisMonth = state.payments.find(p => p.studentId === id && (p.month||'').slice(0,7) === month);
+  const sdPayStatus = document.getElementById('sdPayStatus');
+  if (sdPayStatus) {
+    if (payThisMonth) {
+      sdPayStatus.textContent = `✅ دافع (${payThisMonth.amount} ج.م)`;
+      sdPayStatus.style.color = 'var(--green)';
+    } else {
+      sdPayStatus.textContent = '⚠️ لم يدفع';
+      sdPayStatus.style.color = 'var(--red)';
+    }
   }
+  const lastPayments = state.payments.filter(p => p.studentId === id).slice().sort((a,b)=>b.createdAt-a.createdAt);
+  const sdPayDate = document.getElementById('sdPayDate');
+  if (sdPayDate) {
+    sdPayDate.textContent = lastPayments.length ? new Date(lastPayments[0].createdAt).toLocaleDateString('ar-EG') : 'لا يوجد';
+  }
+
+  renderAttendanceCycleSummary(id);
+
   openModal('studentDetailModal');
 }
 
@@ -451,28 +460,6 @@ function editFromDetail() {
   openStudentModal(currentDetailId);
 }
 
-/* ---- Minimal QR code generator (no external libs) ---- */
-/* Simple QR rendering using a tiny embedded encoder (Model 2, low ECC) */
-function drawQR(text, canvas) {
-  try {
-    const qr = QRGen.create(text, { ecLevel: 'L' });
-    const size = qr.size;
-    const scale = Math.floor(180 / size) || 4;
-    canvas.width = size * scale;
-    canvas.height = size * scale;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0,0,canvas.width,canvas.height);
-    ctx.fillStyle = '#1B2A4A';
-    for (let y=0;y<size;y++){
-      for (let x=0;x<size;x++){
-        if (qr.modules[y][x]) ctx.fillRect(x*scale, y*scale, scale, scale);
-      }
-    }
-  } catch (e) {
-    canvas.parentElement.innerHTML = `<div style="text-align:center;padding:20px;"><div style="font-size:13px;color:var(--muted)">كود الطالب</div><div style="font-size:22px;font-weight:800;color:var(--navy);margin-top:6px;">${text}</div></div>`;
-  }
-}
 
 /* =========================================================
    ATTENDANCE
@@ -551,6 +538,7 @@ async function toggleAttendance(studentId, date) {
   }
   renderAttendanceList();
   renderDashboard();
+  if (currentDetailId === studentId) renderAttendanceCycleSummary(studentId);
 }
 
 /* =========================================================
@@ -612,6 +600,7 @@ async function numConfirm() {
     fullScreenFlash(student, paid, missedLast);
     renderAttendanceList();
     renderDashboard();
+    if (currentDetailId === student.id) renderAttendanceCycleSummary(student.id);
   }
 
   setTimeout(() => { flash.innerHTML = ''; },10000);
@@ -713,6 +702,125 @@ function wasAbsentLastCycle(studentId, date) {
   return !state.attendance.some(a => a.studentId === studentId && a.date >= start && a.date <= end);
 }
 
+/* =========================================================
+   ملخص الحضور/الغياب الدوري كل 8 حصص
+   ========================================================= */
+/* بيحسب لكل طالب، من تاريخ تسجيله، كام دورة (Cycle) المفروض كانت
+   حصلت لحد آخر تاريخ موجود، وبيقارنها بعدد حصص الحضور الفعلية.
+   كل ما الفرق (دورات فاتت - حضور فعلي) يدل على وصول الطالب لعتبة
+   8 حصص مستهدفة، بيتعمل ملخص جديد */
+function getAttendanceCycleSummary(studentId) {
+  const student = state.students.find(s => s.id === studentId);
+  if (!student) return null;
+
+  const records = state.attendance.filter(a => a.studentId === studentId).slice().sort((a,b)=> a.date < b.date ? -1 : 1);
+  const totalAttended = records.length;
+  if (totalAttended === 0) return { totalAttended: 0, totalExpected: 0, totalAbsent: 0, periods: [] };
+
+  // نحسب كل الدورات (cycles) اللي وقعت من تاريخ أول حصة لحد تاريخ آخر حصة (أو النهاردة)
+  const startDate = parseLocalDate(records[0].date);
+  const today = new Date();
+  today.setHours(0,0,0,0);
+
+  let cursor = new Date(startDate);
+  const allCycles = [];
+  // نلف على كل الدورات بداية من أول حصة لحد النهاردة
+  const seen = new Set();
+  while (cursor <= today) {
+    const dStr = fmtLocalDate(cursor);
+    const { start, end } = getCycleRange(dStr);
+    const key = start + '_' + end;
+    if (!seen.has(key)) {
+      seen.add(key);
+      const hasAttendance = state.attendance.some(a => a.studentId === studentId && a.date >= start && a.date <= end);
+      allCycles.push({ start, end, attended: hasAttendance });
+    }
+    cursor = addDays(cursor, 1);
+  }
+
+  const totalExpected = allCycles.length;
+  const totalAbsent = allCycles.filter(c => !c.attended).length;
+
+  // تقسيم لفترات كل 8 دورات
+  const periods = [];
+  let i = 0;
+  for (; i < allCycles.length; i += 8) {
+    const chunk = allCycles.slice(i, i + 8);
+    if (chunk.length < 8) break; // لسه الفترة معملتش 8 حصص كاملة
+    const present = chunk.filter(c => c.attended).length;
+    const absent = chunk.length - present;
+    periods.push({
+      from: chunk[0].start,
+      to: chunk[chunk.length - 1].end,
+      present, absent, total: chunk.length
+    });
+  }
+
+  // الفترة الجارية (لسه ما اكتملتش 8 دورات)
+  let currentPeriod = null;
+  const remaining = allCycles.slice(i);
+  if (remaining.length > 0) {
+    const present = remaining.filter(c => c.attended).length;
+    const absent = remaining.length - present;
+    currentPeriod = {
+      from: remaining[0].start,
+      to: remaining[remaining.length - 1].end,
+      present, absent, total: remaining.length
+    };
+  }
+
+  return { totalAttended, totalExpected, totalAbsent, periods, currentPeriod, allCycles };
+}
+
+function renderAttendanceCycleSummary(studentId) {
+  const box = document.getElementById('sdCycleSummary');
+  if (!box) return;
+  const summary = getAttendanceCycleSummary(studentId);
+
+  if (!summary || !summary.allCycles || summary.allCycles.length === 0) {
+    box.innerHTML = `<div class="empty" style="padding:14px;"><p style="font-size:12.5px;">لسه مفيش حصص مسجلة للطالب ده</p></div>`;
+    return;
+  }
+
+  // كل حصة في صف لوحدها، من الأحدث للأقدم
+  const rowsHtml = summary.allCycles
+    .slice()
+    .reverse()
+    .map((c, idx, arr) => {
+      const num = arr.length - idx; // رقم الحصة من الأقدم
+      const dateLabel = c.start === c.end ? c.start : `${c.start}`;
+      const statusHtml = c.attended
+        ? `<span style="color:var(--green); font-weight:700;">✅ حضر</span>`
+        : `<span style="color:var(--red); font-weight:700;">❌ غاب</span>`;
+      return `<tr style="border-bottom:1px solid var(--line);">
+        <td style="padding:9px 6px; font-size:12px; color:var(--muted); font-weight:600;">${num}</td>
+        <td style="padding:9px 6px; font-size:12.5px;">${dateLabel}</td>
+        <td style="padding:9px 6px; text-align:center; font-size:13px;">${statusHtml}</td>
+      </tr>`;
+    })
+    .join('');
+
+  box.innerHTML = `
+    <div style="overflow-x:auto;">
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <thead>
+          <tr style="border-bottom:2px solid var(--line);">
+            <th style="padding:8px 6px; text-align:right; color:var(--muted); font-size:11px; width:32px;">#</th>
+            <th style="padding:8px 6px; text-align:right; color:var(--muted); font-size:11px;">التاريخ</th>
+            <th style="padding:8px 6px; text-align:center; color:var(--muted); font-size:11px;">الحالة</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:11px; color:var(--muted); margin:8px 2px 0; text-align:right;">
+      إجمالي: ${summary.totalExpected} حصة | حضر: ${summary.totalAttended} | غاب: ${summary.totalAbsent}
+    </p>
+  `;
+}
+
 function fullScreenFlash(student, paid, missedLast) {
   const overlay = document.getElementById('fullFlash');
   const icon = document.getElementById('ffIcon');
@@ -775,7 +883,10 @@ function renderPayments() {
             <div><div class="li-name">${escapeHtml(s.name)}</div><div class="li-sub">${s.fee||0} ج.م / شهريًا</div></div>
           </div>
           ${status==='paid'
-            ? `<span class="badge green">مدفوع ${pay.amount}</span>`
+            ? `<div style="display:flex; gap:6px; align-items:center;">
+                 <span class="badge green">مدفوع ${pay.amount}</span>
+                 <button class="btn outline sm" style="padding:6px 10px; font-size:12px; color:var(--red); border-color:var(--red);" onclick="cancelPayment('${pay.id}')">إلغاء الدفع</button>
+               </div>`
             : `<button class="btn gold sm" onclick="openPaymentModal('${s.id}')">تسجيل دفعة</button>`}
         </div>`;
       }).join('');
@@ -792,7 +903,10 @@ function renderPayments() {
         const st = state.students.find(s => s.id === p.studentId);
         return `<div class="list-item">
           <div class="info"><div><div class="li-name">${escapeHtml(st?st.name:'-')}</div><div class="li-sub">${p.month} ${p.note?'· '+escapeHtml(p.note):''}</div></div></div>
-          <span class="badge gold">${p.amount} ج.م</span>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <span class="badge gold">${p.amount} ج.م</span>
+            <button class="btn outline sm" style="padding:6px 10px; font-size:12px; color:var(--red); border-color:var(--red);" onclick="cancelPayment('${p.id}')">إلغاء</button>
+          </div>
         </div>`;
       }).join('');
     }
@@ -849,6 +963,18 @@ async function savePayment() {
   renderPayments();
   renderDashboard();
   showToast('تم حفظ الدفعة');
+}
+
+async function cancelPayment(paymentId) {
+  const pay = state.payments.find(p => p.id === paymentId);
+  if (!pay) return;
+  const st = state.students.find(s => s.id === pay.studentId);
+  if (!confirm(`متأكد إنك عايز تلغي دفعة ${escapeHtml(st ? st.name : '')} (${pay.amount} ج.م)؟`)) return;
+  state.payments = state.payments.filter(p => p.id !== paymentId);
+  await deleteItem('payments', paymentId);
+  renderPayments();
+  renderDashboard();
+  showToast('تم إلغاء الدفعة');
 }
 
 function openExpenseModal() {
@@ -962,18 +1088,24 @@ async function importBackup(event) {
 }
 
 
+/* =========================================================
+   EXAMS (الاختبارات) - نظام مبسط: اسم الامتحان + رصد الدرجات
+   ========================================================= */
 function renderQuizzes() {
   const box = document.getElementById('quizzesList');
   if (state.quizzes.length === 0) {
-    box.innerHTML = `<div class="empty"><div class="ic">📝</div><p>لا توجد اختبارات - اضغط + لإضافة اختبار</p></div>`;
+    box.innerHTML = `<div class="empty"><div class="ic">📝</div><p>لا توجد اختبارات — اضغط + لإضافة امتحان</p></div>`;
     document.getElementById('quizDetailCard').style.display = 'none';
     return;
   }
   box.innerHTML = state.quizzes.map(q => {
-    const qCount = state.questions.filter(x=>x.quizId===q.id).length;
+    const rCount = state.results.filter(x=>x.quizId===q.id).length;
     const active = q.id === currentQuizId;
     return `<div class="list-item" onclick="openQuiz('${q.id}')" style="cursor:pointer;${active?'background:#FBF3DF;border-radius:10px;padding:12px 10px;':''}">
-      <div class="info"><div><div class="li-name">${escapeHtml(q.title)}</div><div class="li-sub">${qCount} سؤال</div></div></div>
+      <div class="info"><div>
+        <div class="li-name">${escapeHtml(q.title)}</div>
+        <div class="li-sub">من ${q.total||'?'} درجة &nbsp;·&nbsp; ${rCount} طالب</div>
+      </div></div>
       <button class="btn outline sm" onclick="event.stopPropagation();deleteQuiz('${q.id}')">حذف</button>
     </div>`;
   }).join('');
@@ -981,31 +1113,30 @@ function renderQuizzes() {
 
 function openQuizModal() {
   document.getElementById('quizTitle').value = '';
+  document.getElementById('quizTotalScore').value = '';
   openModal('quizModal');
 }
 
 async function saveQuiz() {
   const title = document.getElementById('quizTitle').value.trim();
-  if (!title) return;
-  const data = { id: uid(), title, createdAt: Date.now() };
+  const total = Number(document.getElementById('quizTotalScore').value) || null;
+  if (!title) { showToast('اكتب اسم الامتحان'); return; }
+  const data = { id: uid(), title, total, createdAt: Date.now() };
   state.quizzes.push(data);
   await putItem('quizzes', data);
   closeModal('quizModal');
   renderQuizzes();
-  showToast('تم إضافة الاختبار');
+  showToast('تم إضافة الامتحان ✅');
 }
 
 async function deleteQuiz(id) {
-  if (!confirm('حذف الاختبار وكل أسئلته ونتائجه؟')) return;
+  if (!confirm('حذف الامتحان وكل درجاته؟')) return;
   state.quizzes = state.quizzes.filter(q=>q.id!==id);
-  const qs = state.questions.filter(x=>x.quizId===id);
-  for (const q of qs) await deleteItem('questions', q.id);
-  state.questions = state.questions.filter(x=>x.quizId!==id);
   const rs = state.results.filter(x=>x.quizId===id);
   for (const r of rs) await deleteItem('results', r.id);
   state.results = state.results.filter(x=>x.quizId!==id);
   await deleteItem('quizzes', id);
-  if (currentQuizId===id) currentQuizId=null;
+  if (currentQuizId===id) { currentQuizId=null; document.getElementById('quizDetailCard').style.display='none'; }
   renderQuizzes();
 }
 
@@ -1014,94 +1145,303 @@ function openQuiz(id) {
   const quiz = state.quizzes.find(q=>q.id===id);
   document.getElementById('quizDetailCard').style.display = 'block';
   document.getElementById('quizDetailTitle').textContent = quiz.title;
-  renderQuizQuestions();
+  document.getElementById('quizDetailTotal').textContent = quiz.total ? ' / ' + quiz.total : '';
+  renderBulkGradeEntry();
   renderQuizResultsList();
-  const sel = document.getElementById('quizResultStudent');
-  sel.innerHTML = state.students.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
   renderQuizzes();
 }
 
-function renderQuizQuestions() {
-  const qs = state.questions.filter(q=>q.quizId===currentQuizId);
-  const box = document.getElementById('quizQuestions');
-  if (qs.length===0) {
-    box.innerHTML = `<div class="empty"><div class="ic">❓</div><p>لا توجد أسئلة بعد</p></div>`;
-    return;
-  }
-  box.innerHTML = qs.map((q,i)=>{
-    const opts = q.options.map((o,idx)=>`<div class="opt-row">${idx===q.correct?'✅':'⬜'} ${escapeHtml(o)}</div>`).join('');
-    return `<div class="q-card">
-      <div class="qtext">${i+1}. ${escapeHtml(q.text)}</div>
-      ${opts}
-      <button class="small-link" onclick="deleteQuestion('${q.id}')">حذف السؤال</button>
+/* إدخال درجات جميع الطلاب دفعة واحدة */
+function renderBulkGradeEntry() {
+  const quiz = state.quizzes.find(q=>q.id===currentQuizId);
+  const box = document.getElementById('bulkGradeEntryBox');
+  if (!box) return;
+  const students = state.students.slice().sort((a,b)=> (a.code||'').localeCompare(b.code||''));
+  if (students.length === 0) { box.innerHTML = `<p style="color:var(--muted); font-size:13px;">لا يوجد طلاب مسجلين</p>`; return; }
+
+  box.innerHTML = students.map(s => {
+    const res = state.results.find(r=>r.quizId===currentQuizId && r.studentId===s.id);
+    return `<div style="display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--line);">
+      <div style="flex:1; font-size:13px; font-weight:600;">${escapeHtml(s.name)}</div>
+      <input type="number" min="0" max="${quiz?.total||9999}" placeholder="درجة"
+        value="${res ? res.score : ''}"
+        id="grade_${s.id}"
+        style="width:80px; padding:7px 10px; border-radius:9px; border:1.5px solid var(--line); background:var(--paper); color:var(--ink); font-size:14px; font-family:inherit; text-align:center;"
+        onchange="saveOneGrade('${s.id}')" />
     </div>`;
   }).join('');
 }
 
-async function deleteQuestion(id) {
-  state.questions = state.questions.filter(q=>q.id!==id);
-  await deleteItem('questions', id);
-  renderQuizQuestions();
-}
-
-function openQuestionModal(quizId) {
-  document.getElementById('qQuizId').value = quizId;
-  ['qText','qOpt1','qOpt2','qOpt3','qOpt4'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('qCorrect').value = '0';
-  openModal('questionModal');
-}
-
-async function saveQuestion() {
-  const quizId = document.getElementById('qQuizId').value;
-  const text = document.getElementById('qText').value.trim();
-  const opts = [
-    document.getElementById('qOpt1').value.trim(),
-    document.getElementById('qOpt2').value.trim(),
-    document.getElementById('qOpt3').value.trim(),
-    document.getElementById('qOpt4').value.trim()
-  ].filter(o=>o);
-  const correct = Number(document.getElementById('qCorrect').value);
-  if (!text || opts.length<2) { showToast('أدخل السؤال وعلى الأقل اختيارين'); return; }
-  if (correct >= opts.length) { showToast('اختر إجابة صحيحة موجودة'); return; }
-
-  const data = { id: uid(), quizId, text, options: opts, correct, createdAt: Date.now() };
-  state.questions.push(data);
-  await putItem('questions', data);
-  closeModal('questionModal');
-  renderQuizQuestions();
-  renderQuizzes();
-  showToast('تم إضافة السؤال');
-}
-
-async function saveQuizResult() {
-  const studentId = document.getElementById('quizResultStudent').value;
-  const score = Number(document.getElementById('quizResultScore').value);
-  if (!studentId || isNaN(score)) { showToast('أكمل البيانات'); return; }
+async function saveOneGrade(studentId) {
+  const inp = document.getElementById('grade_' + studentId);
+  if (!inp) return;
+  const val = inp.value.trim();
+  if (val === '') {
+    // حذف الدرجة لو فاضية
+    const existing = state.results.find(r=>r.quizId===currentQuizId && r.studentId===studentId);
+    if (existing) { await deleteItem('results', existing.id); state.results = state.results.filter(r=>r!==existing); }
+    renderQuizResultsList(); renderQuizzes(); return;
+  }
+  const score = Number(val);
   const existing = state.results.find(r=>r.quizId===currentQuizId && r.studentId===studentId);
   const data = { id: existing?existing.id:uid(), quizId: currentQuizId, studentId, score, createdAt: Date.now() };
   if (existing) { const idx=state.results.indexOf(existing); state.results[idx]=data; }
   else state.results.push(data);
   await putItem('results', data);
-  document.getElementById('quizResultScore').value = '';
-  renderQuizResultsList();
-  showToast('تم حفظ النتيجة');
+  renderQuizResultsList(); renderQuizzes();
 }
 
 function renderQuizResultsList() {
-  const results = state.results.filter(r=>r.quizId===currentQuizId).sort((a,b)=>b.score-a.score);
+  const quiz = state.quizzes.find(q=>q.id===currentQuizId);
+  const results = state.results.filter(r=>r.quizId===currentQuizId).slice().sort((a,b)=>b.score-a.score);
   const box = document.getElementById('quizResultsList');
-  const totalQ = state.questions.filter(q=>q.quizId===currentQuizId).length;
+  if (!box) return;
   if (results.length===0) {
-    box.innerHTML = `<div class="empty"><div class="ic">📊</div><p>لا توجد نتائج مسجلة</p></div>`;
+    box.innerHTML = `<div class="empty"><div class="ic">📊</div><p>لسه مفيش درجات مسجلة</p></div>`;
     return;
   }
-  box.innerHTML = results.map(r=>{
+  box.innerHTML = results.map((r,idx)=>{
     const st = state.students.find(s=>s.id===r.studentId);
-    return `<div class="list-item">
-      <div class="info"><div class="avatar">${initials(st?st.name:'?')}</div><div class="li-name">${escapeHtml(st?st.name:'-')}</div></div>
-      <span class="badge gold">${r.score}${totalQ?(' / '+totalQ):''}</span>
+    const parentPhone = normalizePhone(st?.parentPhone);
+    const stuPhone = normalizePhone(st?.phone);
+    const quizName = quiz?.title||'الامتحان';
+    const total = quiz?.total ? ' / '+quiz.total : '';
+    const waMsg = `مرحباً ولي أمر ${st?.name||''}،
+نتيجة ${quizName}: ${r.score}${total} درجة 📊
+من سنتري — نظام إدارة السنتر`;
+    const waStu = `أهلاً ${st?.name||''}،
+نتيجتك في ${quizName}: ${r.score}${total} درجة 📊
+من سنتري`;
+    return `<div class="list-item" style="gap:8px;">
+      <div style="width:28px; height:28px; border-radius:50%; background:var(--blue); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; flex-shrink:0;">${idx+1}</div>
+      <div class="info" style="flex:1;"><div class="li-name">${escapeHtml(st?st.name:'-')}</div></div>
+      <span class="badge gold" style="font-size:14px; min-width:54px; text-align:center;">${r.score}${total}</span>
+      ${parentPhone ? `<button title="إرسال لولي الأمر" onclick="window.open('https://wa.me/${parentPhone}?text='+encodeURIComponent('${waMsg.replace(/'/g,"\'")}'),'_blank')" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0;">👨‍👩‍👦</button>` : ''}
+      ${stuPhone ? `<button title="إرسال للطالب" onclick="window.open('https://wa.me/${stuPhone}?text='+encodeURIComponent('${waStu.replace(/'/g,"\'")}'),'_blank')" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0;">🧑</button>` : ''}
     </div>`;
   }).join('');
+}
+
+/* =========================================================
+   FOLLOW-UP PAGE (المتابعة) - تقرير PDF شامل لكل طالب
+   ========================================================= */
+function renderFollowupPage() {
+  const box = document.getElementById('followupStudentList');
+  if (!box) return;
+  const students = state.students.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  if (students.length === 0) {
+    box.innerHTML = `<div class="empty"><div class="ic">📋</div><p>لا يوجد طلاب</p></div>`;
+    return;
+  }
+  box.innerHTML = students.map(s => {
+    const attCount = state.attendance.filter(a=>a.studentId===s.id).length;
+    return `<div class="list-item" style="cursor:pointer;" onclick="openStudentFollowup('${s.id}')">
+      <div class="info"><div class="avatar">${initials(s.name)}</div><div>
+        <div class="li-name">${escapeHtml(s.name)}</div>
+        <div class="li-sub">${attCount} حصة حضر</div>
+      </div></div>
+      <span style="font-size:20px;">📋</span>
+    </div>`;
+  }).join('');
+}
+
+function openStudentFollowup(studentId) {
+  const s = state.students.find(x=>x.id===studentId);
+  if (!s) return;
+  document.getElementById('followupStudentName').textContent = s.name;
+  document.getElementById('followupDetailBox').style.display = 'block';
+  document.getElementById('followupStudentId').value = studentId;
+  renderFollowupDetail(studentId);
+}
+
+function renderFollowupDetail(studentId) {
+  const s = state.students.find(x=>x.id===studentId);
+  if (!s) return;
+
+  // ===== حضور مجمّع بالشهر =====
+  const attRecords = state.attendance.filter(a=>a.studentId===studentId).sort((a,b)=>a.date<b.date?-1:1);
+  const attByMonth = {};
+  attRecords.forEach(a => {
+    const m = a.date.slice(0,7);
+    if (!attByMonth[m]) attByMonth[m] = 0;
+    attByMonth[m]++;
+  });
+
+  const attRows = Object.entries(attByMonth).map(([m,cnt]) => {
+    const [yr,mo] = m.split('-');
+    const moNames = ['','يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+    return `<tr><td style="padding:7px 8px;">${moNames[Number(mo)]} ${yr}</td><td style="padding:7px 8px; text-align:center; font-weight:700; color:var(--green);">${cnt} ✅</td></tr>`;
+  }).join('');
+
+  // ===== الدرجات =====
+  const quizRows = state.quizzes.map(q => {
+    const res = state.results.find(r=>r.quizId===q.id && r.studentId===studentId);
+    const score = res ? res.score : '—';
+    const total = q.total ? ' / '+q.total : '';
+    const color = res ? (q.total && res.score < q.total*0.5 ? 'var(--red)' : 'var(--green)') : 'var(--muted)';
+    return `<tr><td style="padding:7px 8px;">${escapeHtml(q.title)}</td><td style="padding:7px 8px; text-align:center; font-weight:700; color:${color};">${score}${total}</td></tr>`;
+  }).join('');
+
+  // ===== الدفعات =====
+  const payRecords = state.payments.filter(p=>p.studentId===studentId).sort((a,b)=>b.createdAt-a.createdAt);
+  const payRows = payRecords.map(p => {
+    const d = new Date(p.createdAt);
+    const dateStr = `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;
+    return `<tr><td style="padding:7px 8px;">${p.month||'—'}</td><td style="padding:7px 8px; text-align:center;">${dateStr}</td><td style="padding:7px 8px; text-align:center; font-weight:700; color:var(--green);">${p.amount||'—'} ج.م</td></tr>`;
+  }).join('');
+
+  const box = document.getElementById('followupDetailContent');
+  if (!box) return;
+  box.innerHTML = `
+    <div style="margin-bottom:16px;">
+      <div style="font-size:13px; font-weight:700; color:var(--blue); margin-bottom:6px;">📅 الحضور بالشهر</div>
+      ${attRows ? `<table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+        <thead><tr style="background:var(--paper2);">
+          <th style="padding:7px 8px; text-align:right; font-size:12px;">الشهر</th>
+          <th style="padding:7px 8px; text-align:center; font-size:12px;">عدد الحصص</th>
+        </tr></thead><tbody>${attRows}</tbody></table>` : '<p style="color:var(--muted); font-size:12px;">لا يوجد حضور مسجل</p>'}
+    </div>
+    <div style="margin-bottom:16px;">
+      <div style="font-size:13px; font-weight:700; color:var(--blue); margin-bottom:6px;">📊 الدرجات</div>
+      ${quizRows ? `<table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+        <thead><tr style="background:var(--paper2);">
+          <th style="padding:7px 8px; text-align:right; font-size:12px;">الامتحان</th>
+          <th style="padding:7px 8px; text-align:center; font-size:12px;">الدرجة</th>
+        </tr></thead><tbody>${quizRows}</tbody></table>` : '<p style="color:var(--muted); font-size:12px;">لا توجد درجات مسجلة</p>'}
+    </div>
+    <div style="margin-bottom:16px;">
+      <div style="font-size:13px; font-weight:700; color:var(--blue); margin-bottom:6px;">💰 سجل الدفعات</div>
+      ${payRows ? `<table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+        <thead><tr style="background:var(--paper2);">
+          <th style="padding:7px 8px; text-align:right; font-size:12px;">الشهر</th>
+          <th style="padding:7px 8px; text-align:center; font-size:12px;">تاريخ الدفع</th>
+          <th style="padding:7px 8px; text-align:center; font-size:12px;">المبلغ</th>
+        </tr></thead><tbody>${payRows}</tbody></table>` : '<p style="color:var(--muted); font-size:12px;">لا توجد دفعات مسجلة</p>'}
+    </div>
+  `;
+}
+
+function sendFollowupWhatsApp() {
+  const studentId = document.getElementById('followupStudentId').value;
+  const s = state.students.find(x=>x.id===studentId);
+  if (!s) return;
+  const parentPhone = normalizePhone(s.parentPhone);
+  if (!parentPhone) { showToast('لا يوجد رقم ولي أمر'); return; }
+
+  // حضور
+  const attRecords = state.attendance.filter(a=>a.studentId===studentId);
+  const attTotal = attRecords.length;
+  const moNames = ['','يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const attByMonth = {};
+  attRecords.forEach(a => { const m=a.date.slice(0,7); attByMonth[m]=(attByMonth[m]||0)+1; });
+  const attLines = Object.entries(attByMonth).map(([m,c])=>{
+    const [yr,mo]=m.split('-'); return `• ${moNames[Number(mo)]} ${yr}: ${c} حصة`;
+  }).join('\n');
+
+  // درجات
+  const gradeLines = state.quizzes.map(q => {
+    const res = state.results.find(r=>r.quizId===q.id && r.studentId===studentId);
+    const score = res ? res.score + (q.total?' / '+q.total:'') : 'لم يُسجَّل';
+    return `• ${q.title}: ${score}`;
+  }).join('\n');
+
+  // دفعات
+  const pays = state.payments.filter(p=>p.studentId===studentId).sort((a,b)=>b.createdAt-a.createdAt);
+  const payLines = pays.map(p => {
+    const d = new Date(p.createdAt);
+    return `• ${p.month||''} — ${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} — ${p.amount||'—'} ج.م`;
+  }).join('\n');
+
+  const closingMsg = document.getElementById('followupClosingMsg').value.trim() ||
+    'نتمنى التوفيق والنجاح لمهندسكم🌟';
+
+  const msg = `السلام عليكم ورحمة الله،
+ولي أمر الطالب: ${s.name}
+
+📅 *الحضور* (إجمالي: ${attTotal} حصة):
+${attLines || 'لا يوجد حضور مسجل'}
+
+📊 *الدرجات*:
+${gradeLines || 'لا توجد درجات مسجلة'}
+
+💰 *الدفع*:
+${payLines || 'لا توجد سجلات دفع مسجلة'}
+
+${closingMsg}
+
+— مع تحيات Eng.MohamedAshraf
+نتمنى التوفيق والنجاح لمهندسكم🌟`;
+
+  window.open(`https://wa.me/${parentPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+function printFollowupPDF() {
+  const studentId = document.getElementById('followupStudentId').value;
+  const s = state.students.find(x=>x.id===studentId);
+  if (!s) return;
+
+  const moNames = ['','يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const attRecords = state.attendance.filter(a=>a.studentId===studentId).sort((a,b)=>a.date<b.date?-1:1);
+  const attByMonth = {};
+  attRecords.forEach(a => { const m=a.date.slice(0,7); attByMonth[m]=(attByMonth[m]||0)+1; });
+  const attRows = Object.entries(attByMonth).map(([m,c]) => {
+    const [yr,mo]=m.split('-');
+    return `<tr><td>${moNames[Number(mo)]} ${yr}</td><td style="text-align:center; color:#2d9a5b; font-weight:700;">${c} حصة ✅</td></tr>`;
+  }).join('');
+
+  const quizRows = state.quizzes.map(q => {
+    const res = state.results.find(r=>r.quizId===q.id && r.studentId===studentId);
+    const score = res ? res.score+(q.total?' / '+q.total:'') : '—';
+    const color = res ? (q.total && res.score < q.total*0.5 ? '#c0392b' : '#2d9a5b') : '#888';
+    return `<tr><td>${q.title}</td><td style="text-align:center; font-weight:700; color:${color};">${score}</td></tr>`;
+  }).join('');
+
+  const pays = state.payments.filter(p=>p.studentId===studentId).sort((a,b)=>b.createdAt-a.createdAt);
+  const payRows = pays.map(p => {
+    const d = new Date(p.createdAt);
+    return `<tr><td>${p.month||'—'}</td><td style="text-align:center;">${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}</td><td style="text-align:center; font-weight:700; color:#2d9a5b;">${p.amount||'—'} ج.م</td></tr>`;
+  }).join('');
+
+  const closingMsg = document.getElementById('followupClosingMsg').value.trim() || 'نتمنى التوفيق والنجاح 🌟';
+  const todayStr = new Date().toLocaleDateString('ar-EG');
+
+  const html = `<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8">
+  <title>تقرير متابعة — ${s.name}</title>
+  <style>
+    body{font-family:Arial,sans-serif; direction:rtl; padding:24px; color:#1B2A4A; background:#fff;}
+    h1{font-size:22px; color:#1B2A4A; margin-bottom:4px;}
+    .sub{color:#888; font-size:13px; margin-bottom:20px;}
+    h2{font-size:15px; color:#4d8aff; margin:18px 0 8px; border-bottom:2px solid #e0e5f0; padding-bottom:4px;}
+    table{width:100%; border-collapse:collapse; font-size:13px; margin-bottom:8px;}
+    th,td{padding:8px 10px; border:1px solid #dde2ee; text-align:right;}
+    th{background:#f0f4ff; font-weight:700;}
+    .footer{margin-top:24px; font-size:12px; color:#888; border-top:1px solid #eee; padding-top:12px;}
+    .closing{background:#f0f4ff; border-radius:8px; padding:12px 16px; font-size:13px; margin-top:16px;}
+    @media print{body{padding:12px;}}
+  </style></head><body>
+  <h1>📋 تقرير متابعة الطالب</h1>
+  <div class="sub">الطالب: <strong>${s.name}</strong> &nbsp;|&nbsp; كود: ${s.code||'—'} &nbsp;|&nbsp; تاريخ التقرير: ${todayStr}</div>
+
+  <h2>📅 الحضور بالشهر (إجمالي: ${attRecords.length} حصة)</h2>
+  <table><thead><tr><th>الشهر</th><th style="text-align:center;">عدد الحصص</th></tr></thead>
+  <tbody>${attRows || '<tr><td colspan="2" style="text-align:center; color:#888;">لا يوجد حضور مسجل</td></tr>'}</tbody></table>
+
+  <h2>📊 الدرجات</h2>
+  <table><thead><tr><th>الامتحان</th><th style="text-align:center;">الدرجة</th></tr></thead>
+  <tbody>${quizRows || '<tr><td colspan="2" style="text-align:center; color:#888;">لا توجد درجات</td></tr>'}</tbody></table>
+
+  <h2>💰 سجل الدفع</h2>
+  <table><thead><tr><th>الشهر</th><th style="text-align:center;">تاريخ الدفع</th><th style="text-align:center;">المبلغ</th></tr></thead>
+  <tbody>${payRows || '<tr><td colspan="3" style="text-align:center; color:#888;">لا توجد دفعات</td></tr>'}</tbody></table>
+
+  <div class="closing">${closingMsg}</div>
+  <div class="footer">Eng.Mohamed Ashraf/n 01020614529-01158668841</div>
+  <script>window.onload=()=>{ window.print(); }<\/script>
+  </body></html>`;
+
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
 }
 
 /* =========================================================
@@ -1292,8 +1632,8 @@ function saveContact(studentId, type) {
 
 /* ---------------- قوالب الرسائل التلقائية (قابلة للتعديل) ---------------- */
 const DEFAULT_TEMPLATES = {
-  studentCode: 'كودك هو ({code})\nمع تحيات eng.MohamedAshraf',
-  parentAbsent: 'الطالب/ {name} المسجل لم يحضر اليوم'
+  studentCode: 'كودك هو ({code})\nمع تحياتEng.MohamedAshraf',
+  parentAbsent: 'الطالب/ {name} المسجل لم يحضر اليوم n\ مع تحياتEng.MohamedAshraf'
 };
 
 function getMessageTemplates() {
@@ -1362,7 +1702,11 @@ function whatsappParentAbsent(studentId) {
 /* =========================================================
    STARTUP
    ========================================================= */
-window.addEventListener('load', async () => {
+window.addEventListener('load', () => {
+  startApp();
+});
+
+async function startApp() {
   try {
     await openDB();
   } catch (err) {
@@ -1412,7 +1756,7 @@ window.addEventListener('load', async () => {
   }
 
   setTimeout(checkBackupReminder, 2500);
-});
+}
 
 /* بانر بسيط يظهر لما تتحدث ملفات التطبيق (ميزة جديدة / تعديل) على
    السيرفر، عشان المستخدم يعرف إن فيه نسخة أحدث ويحدّث براحته بدون
@@ -1751,224 +2095,3 @@ function openExportPanel(section) {
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
 
-const QRGen = (function(){
-  // Galois field tables for Reed-Solomon
-  const EXP = new Array(256), LOG = new Array(256);
-  (function(){
-    let x=1;
-    for(let i=0;i<255;i++){ EXP[i]=x; LOG[x]=i; x = x<<1; if (x & 0x100) x ^= 0x11D; }
-    EXP[255]=EXP[0];
-  })();
-  function gMul(a,b){ if(a===0||b===0) return 0; return EXP[(LOG[a]+LOG[b])%255]; }
-
-  function rsGenPoly(degree){
-    let poly=[1];
-    for(let i=0;i<degree;i++){
-      let next = new Array(poly.length+1).fill(0);
-      for(let j=0;j<poly.length;j++){
-        next[j] ^= gMul(poly[j], EXP[i]);
-        next[j+1] ^= poly[j];
-      }
-      poly = next;
-    }
-    return poly;
-  }
-  function rsEncode(data, ecLen){
-    const gen = rsGenPoly(ecLen);
-    let res = data.slice();
-    res = res.concat(new Array(ecLen).fill(0));
-    for(let i=0;i<data.length;i++){
-      const coef = res[i];
-      if(coef!==0){
-        for(let j=0;j<gen.length;j++){
-          res[i+j] ^= gMul(gen[j], coef);
-        }
-      }
-    }
-    return res.slice(data.length);
-  }
-
-  // QR version configs for byte mode, EC level L (subset, versions 1-10 sufficient for short codes)
-  // [version, totalCodewords, ecCodewordsPerBlock, numBlocks, dataCapacityBytes]
-  const VERSIONS = [
-    {v:1, size:21, total:26, ec:7, blocks:1, dataCap:19},
-    {v:2, size:25, total:44, ec:10, blocks:1, dataCap:34},
-    {v:3, size:29, total:70, ec:15, blocks:1, dataCap:55},
-    {v:4, size:33, total:100, ec:20, blocks:1, dataCap:80},
-    {v:5, size:37, total:134, ec:26, blocks:1, dataCap:108},
-    {v:6, size:41, total:172, ec:18, blocks:2, dataCap:136},
-    {v:7, size:45, total:196, ec:20, blocks:2, dataCap:156},
-    {v:8, size:49, total:242, ec:24, blocks:2, dataCap:194},
-    {v:9, size:53, total:292, ec:30, blocks:2, dataCap:232},
-    {v:10,size:57, total:346, ec:18, blocks:4, dataCap:274}
-  ];
-
-  function selectVersion(byteLen){
-    for(const cfg of VERSIONS){
-      // capacity check accounting for mode+length header (~3 bytes)
-      if (byteLen + 3 <= cfg.dataCap) return cfg;
-    }
-    return VERSIONS[VERSIONS.length-1];
-  }
-
-  function create(text, opts){
-    const bytes = [];
-    for (let i=0;i<text.length;i++) bytes.push(text.charCodeAt(i) & 0xFF);
-
-    const cfg = selectVersion(bytes.length);
-    const dataCodewords = cfg.total - cfg.ec*cfg.blocks;
-
-    // Build bit stream: mode(4 bits)=0100, length(8 bits for v1-9 byte mode), data
-    let bits = '0100'; // byte mode
-    const lenBits = cfg.v < 10 ? 8 : 16;
-    bits += bytes.length.toString(2).padStart(lenBits,'0');
-    for(const b of bytes) bits += b.toString(2).padStart(8,'0');
-    // terminator
-    bits += '0000';
-    // pad to byte boundary
-    while(bits.length % 8 !== 0) bits += '0';
-    // pad bytes
-    const padBytes = [0xEC,0x11];
-    let pi=0;
-    while(bits.length/8 < dataCodewords){
-      bits += padBytes[pi%2].toString(2).padStart(8,'0');
-      pi++;
-    }
-    // convert to codewords
-    let dataCw = [];
-    for(let i=0;i<bits.length;i+=8) dataCw.push(parseInt(bits.substr(i,8),2));
-    dataCw = dataCw.slice(0,dataCodewords);
-
-    // split into blocks (simplified: equal blocks)
-    const blockSize = Math.floor(dataCw.length / cfg.blocks);
-    const blocks = [];
-    let pos=0;
-    for(let i=0;i<cfg.blocks;i++){
-      const size = (i===cfg.blocks-1) ? dataCw.length-pos : blockSize;
-      blocks.push(dataCw.slice(pos,pos+size));
-      pos+=size;
-    }
-    // interleave data + ec
-    const ecBlocks = blocks.map(b=>rsEncode(b, cfg.ec));
-    const finalCw = [];
-    const maxLen = Math.max(...blocks.map(b=>b.length));
-    for(let i=0;i<maxLen;i++) for(const b of blocks) if(i<b.length) finalCw.push(b[i]);
-    for(let i=0;i<cfg.ec;i++) for(const e of ecBlocks) finalCw.push(e[i]);
-
-    // build matrix
-    const size = cfg.size;
-    const modules = Array.from({length:size},()=>new Array(size).fill(null));
-    const reserved = Array.from({length:size},()=>new Array(size).fill(false));
-
-    function setModule(x,y,val){ modules[y][x]=val; reserved[y][x]=true; }
-
-    // finder patterns
-    function placeFinder(px,py){
-      for(let y=-1;y<=7;y++) for(let x=-1;x<=7;x++){
-        const xi=px+x, yi=py+y;
-        if(xi<0||yi<0||xi>=size||yi>=size) continue;
-        let val=0;
-        if(x>=0&&x<=6&&y>=0&&y<=6){
-          if(x===0||x===6||y===0||y===6) val=1;
-          else if(x>=2&&x<=4&&y>=2&&y<=4) val=1;
-          else val=0;
-        }
-        setModule(xi,yi,val);
-      }
-    }
-    placeFinder(0,0);
-    placeFinder(size-7,0);
-    placeFinder(0,size-7);
-
-    // timing patterns
-    for(let i=8;i<size-8;i++){
-      setModule(i,6, i%2===0?1:0);
-      setModule(6,i, i%2===0?1:0);
-    }
-
-    // dark module
-    setModule(8, size-8, 1);
-
-    // alignment patterns (version >=2)
-    function placeAlign(px,py){
-      for(let y=-2;y<=2;y++) for(let x=-2;x<=2;x++){
-        let val=0;
-        if(Math.max(Math.abs(x),Math.abs(y))===2||(x===0&&y===0)) val=1;
-        setModule(px+x,py+y,val);
-      }
-    }
-    const alignPos = {2:[6,18],3:[6,22],4:[6,26],5:[6,30],6:[6,34],7:[6,22,38],8:[6,24,42],9:[6,26,46],10:[6,28,50]};
-    if(alignPos[cfg.v]){
-      const positions = alignPos[cfg.v];
-      for(const px of positions) for(const py of positions){
-        if((px<=8&&py<=8)||(px<=8&&py>=size-9)||(px>=size-9&&py<=8)) continue;
-        placeAlign(px,py);
-      }
-    }
-
-    // format info reserved areas (we'll fill with EC level L + mask 0 fixed, simplified)
-    // reserve format info strips
-    for(let i=0;i<9;i++){
-      if(!reserved[8][i]) reserved[8][i]=true, modules[8][i]=0;
-      if(!reserved[i][8]) reserved[i][8]=true, modules[i][8]=0;
-    }
-    for(let i=size-8;i<size;i++){
-      if(!reserved[8][i]) reserved[8][i]=true, modules[8][i]=0;
-      if(!reserved[i][8]) reserved[i][8]=true, modules[i][8]=0;
-    }
-
-    // place data bits in zigzag
-    const bitsAll = [];
-    for(const cw of finalCw) for(let b=7;b>=0;b--) bitsAll.push((cw>>b)&1);
-    // add remainder bits as 0
-    let bi=0;
-    let dir=-1;
-    let col=size-1;
-    while(col>0){
-      if(col===6) col--; // skip timing column
-      for(let i=0;i<size;i++){
-        const row = dir===-1 ? size-1-i : i;
-        for(const c of [col,col-1]){
-          if(c<0) continue;
-          if(reserved[row][c]) continue;
-          const bit = bi<bitsAll.length ? bitsAll[bi]:0;
-          bi++;
-          // mask pattern 0: (row+col)%2==0
-          const masked = ((row+c)%2===0) ? bit^1 : bit;
-          modules[row][c]=masked;
-          reserved[row][c]=true;
-        }
-      }
-      dir = -dir;
-      col -= 2;
-    }
-
-    // fill any remaining nulls with 0
-    for(let y=0;y<size;y++) for(let x=0;x<size;x++) if(modules[y][x]===null) modules[y][x]=0;
-
-    // format info (EC level L=01, mask=000) -> BCH encode
-    function formatInfo(){
-      const data = 0b01000; // ECL L (01) + mask(000)
-      let bch = data << 10;
-      const g = 0b10100110111;
-      let temp = bch;
-      for(let i=14;i>=10;i--){
-        if((temp>>i)&1) temp ^= (g << (i-10));
-      }
-      let fmt = (data<<10 | temp) ^ 0b101010000010010;
-      return fmt;
-    }
-    const fmt = formatInfo();
-    const fmtBits=[];
-    for(let i=14;i>=0;i--) fmtBits.push((fmt>>i)&1);
-    // place around top-left finder
-    const fmtPos1 = [[8,0],[8,1],[8,2],[8,3],[8,4],[8,5],[8,7],[8,8],[7,8],[5,8],[4,8],[3,8],[2,8],[1,8],[0,8]];
-    for(let i=0;i<15;i++){ const [x,y]=fmtPos1[i]; modules[y][x]=fmtBits[i]; }
-    const fmtPos2 = [[size-1,8],[size-2,8],[size-3,8],[size-4,8],[size-5,8],[size-6,8],[size-7,8],[size-8,8],[8,size-7],[8,size-6],[8,size-5],[8,size-4],[8,size-3],[8,size-2],[8,size-1]];
-    for(let i=0;i<15;i++){ const [x,y]=fmtPos2[i]; modules[y][x]=fmtBits[i]; }
-
-    return {size, modules};
-  }
-
-  return { create };
-})();
