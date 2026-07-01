@@ -139,9 +139,10 @@ function goPage(name) {
   if (name === 'home') renderDashboard();
   if (name === 'students') renderStudents();
   if (name === 'attendance') renderAttendancePage();
-  if (name === 'payments') renderPayments();
+  if (name === 'payments') { guardPaymentsPage(); } else { paymentsUnlocked = false; }
   if (name === 'quizzes') renderQuizzes();
   if (name === 'followup') renderFollowupPage();
+  if (name === 'settings') loadPaymentsPasswordStatusUI();
 
   if (name !== 'attendance') numpadValue = '', updateNumDisplay();
   closeDrawer();
@@ -234,6 +235,19 @@ function initials(name) {
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* بيحسب النسبة المئوية والتقدير من الدرجة والدرجة النهائية */
+function getGradeInfo(score, total) {
+  if (!total || total <= 0 || score === null || score === undefined || score === '') return null;
+  const pct = Math.round((Number(score) / Number(total)) * 1000) / 10;
+  let label, color;
+  if (pct >= 90) { label = 'ممتاز'; color = 'var(--green)'; }
+  else if (pct >= 80) { label = 'جيد جدًا'; color = 'var(--green)'; }
+  else if (pct >= 65) { label = 'جيد'; color = 'var(--blue)'; }
+  else if (pct >= 50) { label = 'مقبول'; color = 'var(--orange)'; }
+  else { label = 'ضعيف'; color = 'var(--red)'; }
+  return { pct, label, color };
 }
 
 /* =========================================================
@@ -484,6 +498,19 @@ function renderAttendancePage() {
   renderAttendanceList();
 }
 
+let showAbsentOnly = false;
+
+function toggleAbsentOnlyFilter() {
+  showAbsentOnly = !showAbsentOnly;
+  const btn = document.getElementById('absentOnlyBtn');
+  if (btn) {
+    btn.innerHTML = showAbsentOnly ? '👁️ عرض الكل' : '📵 عرض الغائبين فقط';
+    btn.style.background = showAbsentOnly ? 'var(--red)' : 'transparent';
+    btn.style.color = showAbsentOnly ? '#fff' : 'var(--red)';
+  }
+  renderAttendanceList();
+}
+
 function renderAttendanceList() {
   const date = document.getElementById('attDateInput').value || todayStr();
   const groupFilter = document.getElementById('attGroupFilter').value || 'all';
@@ -492,9 +519,13 @@ function renderAttendanceList() {
 
   const presentIds = new Set(state.attendance.filter(a => a.date === date).map(a => a.studentId));
 
+  if (showAbsentOnly) students = students.filter(s => !presentIds.has(s.id));
+
   const box = document.getElementById('attendanceList');
   if (students.length === 0) {
-    box.innerHTML = `<div class="empty"><div class="ic">👥</div><p>لا يوجد طلاب</p></div>`;
+    box.innerHTML = showAbsentOnly
+      ? `<div class="empty"><div class="ic">🎉</div><p>مفيش غائبين — كل الطلاب حاضرين!</p></div>`
+      : `<div class="empty"><div class="ic">👥</div><p>لا يوجد طلاب</p></div>`;
     return;
   }
   const month = thisMonthStr();
@@ -1161,8 +1192,10 @@ function renderBulkGradeEntry() {
 
   box.innerHTML = students.map(s => {
     const res = state.results.find(r=>r.quizId===currentQuizId && r.studentId===s.id);
+    const gi = res && quiz?.total ? getGradeInfo(res.score, quiz.total) : null;
     return `<div style="display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--line);">
       <div style="flex:1; font-size:13px; font-weight:600;">${escapeHtml(s.name)}</div>
+      <span id="gradeInfo_${s.id}" style="font-size:11px; font-weight:700; color:${gi?gi.color:'var(--muted)'}; min-width:70px; text-align:center;">${gi ? gi.pct+'% · '+gi.label : ''}</span>
       <input type="number" min="0" max="${quiz?.total||9999}" placeholder="درجة"
         value="${res ? res.score : ''}"
         id="grade_${s.id}"
@@ -1180,15 +1213,23 @@ async function saveOneGrade(studentId) {
     // حذف الدرجة لو فاضية
     const existing = state.results.find(r=>r.quizId===currentQuizId && r.studentId===studentId);
     if (existing) { await deleteItem('results', existing.id); state.results = state.results.filter(r=>r!==existing); }
-    renderQuizResultsList(); renderQuizzes(); return;
+    renderBulkGradeEntry(); renderQuizResultsList(); renderQuizzes(); return;
   }
-  const score = Number(val);
+  let score = Number(val);
+  const quiz = state.quizzes.find(q=>q.id===currentQuizId);
+  // الدرجة مينفعش تبقى أكبر من الدرجة النهائية للامتحان
+  if (quiz && quiz.total && score > quiz.total) {
+    showToast(`⚠️ الدرجة أكبر من الدرجة النهائية (${quiz.total}) — تم التعديل تلقائياً`);
+    score = quiz.total;
+  }
+  if (score < 0) score = 0;
+  inp.value = score;
   const existing = state.results.find(r=>r.quizId===currentQuizId && r.studentId===studentId);
   const data = { id: existing?existing.id:uid(), quizId: currentQuizId, studentId, score, createdAt: Date.now() };
   if (existing) { const idx=state.results.indexOf(existing); state.results[idx]=data; }
   else state.results.push(data);
   await putItem('results', data);
-  renderQuizResultsList(); renderQuizzes();
+  renderBulkGradeEntry(); renderQuizResultsList(); renderQuizzes();
 }
 
 function renderQuizResultsList() {
@@ -1206,15 +1247,17 @@ function renderQuizResultsList() {
     const stuPhone = normalizePhone(st?.phone);
     const quizName = quiz?.title||'الامتحان';
     const total = quiz?.total ? ' / '+quiz.total : '';
+    const gi = quiz?.total ? getGradeInfo(r.score, quiz.total) : null;
+    const giText = gi ? ` (${gi.pct}% — ${gi.label})` : '';
     const waMsg = `مرحباً ولي أمر ${st?.name||''}،
-نتيجة ${quizName}: ${r.score}${total} درجة 📊
+نتيجة ${quizName}: ${r.score}${total} درجة${giText} 📊
 من سنتري — نظام إدارة السنتر`;
     const waStu = `أهلاً ${st?.name||''}،
-نتيجتك في ${quizName}: ${r.score}${total} درجة 📊
+نتيجتك في ${quizName}: ${r.score}${total} درجة${giText} 📊
 من سنتري`;
     return `<div class="list-item" style="gap:8px;">
       <div style="width:28px; height:28px; border-radius:50%; background:var(--blue); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; flex-shrink:0;">${idx+1}</div>
-      <div class="info" style="flex:1;"><div class="li-name">${escapeHtml(st?st.name:'-')}</div></div>
+      <div class="info" style="flex:1;"><div class="li-name">${escapeHtml(st?st.name:'-')}</div>${gi?`<div class="li-sub" style="color:${gi.color}; font-weight:700;">${gi.pct}% · ${gi.label}</div>`:''}</div>
       <span class="badge gold" style="font-size:14px; min-width:54px; text-align:center;">${r.score}${total}</span>
       ${parentPhone ? `<button title="إرسال لولي الأمر" onclick="window.open('https://wa.me/${parentPhone}?text='+encodeURIComponent('${waMsg.replace(/'/g,"\'")}'),'_blank')" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0;">👨‍👩‍👦</button>` : ''}
       ${stuPhone ? `<button title="إرسال للطالب" onclick="window.open('https://wa.me/${stuPhone}?text='+encodeURIComponent('${waStu.replace(/'/g,"\'")}'),'_blank')" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0;">🧑</button>` : ''}
@@ -1225,38 +1268,48 @@ function renderQuizResultsList() {
 /* =========================================================
    FOLLOW-UP PAGE (المتابعة) - تقرير PDF شامل لكل طالب
    ========================================================= */
+let openFollowupId = null;
+
 function renderFollowupPage() {
   const box = document.getElementById('followupStudentList');
   if (!box) return;
-  const students = state.students.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const search = (document.getElementById('followupSearch')?.value || '').trim().toLowerCase();
+  let students = state.students.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  if (search) {
+    students = students.filter(s =>
+      (s.name||'').toLowerCase().includes(search) ||
+      (s.code||'').toLowerCase().includes(search)
+    );
+  }
   if (students.length === 0) {
-    box.innerHTML = `<div class="empty"><div class="ic">📋</div><p>لا يوجد طلاب</p></div>`;
+    box.innerHTML = `<div class="empty"><div class="ic">📋</div><p>لا يوجد طلاب${search ? ' مطابقين للبحث' : ''}</p></div>`;
     return;
   }
   box.innerHTML = students.map(s => {
     const attCount = state.attendance.filter(a=>a.studentId===s.id).length;
-    return `<div class="list-item" style="cursor:pointer;" onclick="openStudentFollowup('${s.id}')">
-      <div class="info"><div class="avatar">${initials(s.name)}</div><div>
-        <div class="li-name">${escapeHtml(s.name)}</div>
-        <div class="li-sub">${attCount} حصة حضر</div>
-      </div></div>
-      <span style="font-size:20px;">📋</span>
-    </div>`;
+    const isOpen = openFollowupId === s.id;
+    let html = `<div class="list-item" style="flex-direction:column; align-items:stretch; cursor:default;">
+      <div style="display:flex; align-items:center; justify-content:space-between; cursor:pointer;" onclick="toggleStudentFollowup('${s.id}')">
+        <div class="info"><div class="avatar">${initials(s.name)}</div><div>
+          <div class="li-name">${escapeHtml(s.name)}</div>
+          <div class="li-sub">${escapeHtml(s.code||'')} · ${attCount} حصة حضر</div>
+        </div></div>
+        <span style="font-size:20px;">${isOpen ? '📂' : '📋'}</span>
+      </div>`;
+    if (isOpen) html += renderFollowupDetailHTML(s.id);
+    html += `</div>`;
+    return html;
   }).join('');
 }
 
-function openStudentFollowup(studentId) {
-  const s = state.students.find(x=>x.id===studentId);
-  if (!s) return;
-  document.getElementById('followupStudentName').textContent = s.name;
-  document.getElementById('followupDetailBox').style.display = 'block';
-  document.getElementById('followupStudentId').value = studentId;
-  renderFollowupDetail(studentId);
+function toggleStudentFollowup(studentId) {
+  openFollowupId = (openFollowupId === studentId) ? null : studentId;
+  renderFollowupPage();
 }
 
-function renderFollowupDetail(studentId) {
+function renderFollowupDetailHTML(studentId) {
   const s = state.students.find(x=>x.id===studentId);
-  if (!s) return;
+  if (!s) return '';
 
   // ===== حضور مجمّع بالشهر =====
   const attRecords = state.attendance.filter(a=>a.studentId===studentId).sort((a,b)=>a.date<b.date?-1:1);
@@ -1266,20 +1319,21 @@ function renderFollowupDetail(studentId) {
     if (!attByMonth[m]) attByMonth[m] = 0;
     attByMonth[m]++;
   });
-
+  const moNames = ['','يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
   const attRows = Object.entries(attByMonth).map(([m,cnt]) => {
     const [yr,mo] = m.split('-');
-    const moNames = ['','يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
     return `<tr><td style="padding:7px 8px;">${moNames[Number(mo)]} ${yr}</td><td style="padding:7px 8px; text-align:center; font-weight:700; color:var(--green);">${cnt} ✅</td></tr>`;
   }).join('');
 
-  // ===== الدرجات =====
+  // ===== الدرجات (مع النسبة والتقدير) =====
   const quizRows = state.quizzes.map(q => {
     const res = state.results.find(r=>r.quizId===q.id && r.studentId===studentId);
     const score = res ? res.score : '—';
     const total = q.total ? ' / '+q.total : '';
-    const color = res ? (q.total && res.score < q.total*0.5 ? 'var(--red)' : 'var(--green)') : 'var(--muted)';
-    return `<tr><td style="padding:7px 8px;">${escapeHtml(q.title)}</td><td style="padding:7px 8px; text-align:center; font-weight:700; color:${color};">${score}${total}</td></tr>`;
+    const gi = res && q.total ? getGradeInfo(res.score, q.total) : null;
+    const color = gi ? gi.color : (res ? 'var(--green)' : 'var(--muted)');
+    const giText = gi ? `<div style="font-size:11px; font-weight:700; color:${gi.color};">${gi.pct}% · ${gi.label}</div>` : '';
+    return `<tr><td style="padding:7px 8px;">${escapeHtml(q.title)}</td><td style="padding:7px 8px; text-align:center; font-weight:700; color:${color};">${score}${total}${giText}</td></tr>`;
   }).join('');
 
   // ===== الدفعات =====
@@ -1290,39 +1344,47 @@ function renderFollowupDetail(studentId) {
     return `<tr><td style="padding:7px 8px;">${p.month||'—'}</td><td style="padding:7px 8px; text-align:center;">${dateStr}</td><td style="padding:7px 8px; text-align:center; font-weight:700; color:var(--green);">${p.amount||'—'} ج.م</td></tr>`;
   }).join('');
 
-  const box = document.getElementById('followupDetailContent');
-  if (!box) return;
-  box.innerHTML = `
-    <div style="margin-bottom:16px;">
-      <div style="font-size:13px; font-weight:700; color:var(--blue); margin-bottom:6px;">📅 الحضور بالشهر</div>
-      ${attRows ? `<table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid var(--line); border-radius:8px; overflow:hidden;">
-        <thead><tr style="background:var(--paper2);">
-          <th style="padding:7px 8px; text-align:right; font-size:12px;">الشهر</th>
-          <th style="padding:7px 8px; text-align:center; font-size:12px;">عدد الحصص</th>
-        </tr></thead><tbody>${attRows}</tbody></table>` : '<p style="color:var(--muted); font-size:12px;">لا يوجد حضور مسجل</p>'}
-    </div>
-    <div style="margin-bottom:16px;">
-      <div style="font-size:13px; font-weight:700; color:var(--blue); margin-bottom:6px;">📊 الدرجات</div>
-      ${quizRows ? `<table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid var(--line); border-radius:8px; overflow:hidden;">
-        <thead><tr style="background:var(--paper2);">
-          <th style="padding:7px 8px; text-align:right; font-size:12px;">الامتحان</th>
-          <th style="padding:7px 8px; text-align:center; font-size:12px;">الدرجة</th>
-        </tr></thead><tbody>${quizRows}</tbody></table>` : '<p style="color:var(--muted); font-size:12px;">لا توجد درجات مسجلة</p>'}
-    </div>
-    <div style="margin-bottom:16px;">
-      <div style="font-size:13px; font-weight:700; color:var(--blue); margin-bottom:6px;">💰 سجل الدفعات</div>
-      ${payRows ? `<table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid var(--line); border-radius:8px; overflow:hidden;">
-        <thead><tr style="background:var(--paper2);">
-          <th style="padding:7px 8px; text-align:right; font-size:12px;">الشهر</th>
-          <th style="padding:7px 8px; text-align:center; font-size:12px;">تاريخ الدفع</th>
-          <th style="padding:7px 8px; text-align:center; font-size:12px;">المبلغ</th>
-        </tr></thead><tbody>${payRows}</tbody></table>` : '<p style="color:var(--muted); font-size:12px;">لا توجد دفعات مسجلة</p>'}
+  return `
+    <div style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--line);">
+      <div style="margin-bottom:16px;">
+        <div style="font-size:13px; font-weight:700; color:var(--blue); margin-bottom:6px;">📅 الحضور بالشهر</div>
+        ${attRows ? `<table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+          <thead><tr style="background:var(--paper2);">
+            <th style="padding:7px 8px; text-align:right; font-size:12px;">الشهر</th>
+            <th style="padding:7px 8px; text-align:center; font-size:12px;">عدد الحصص</th>
+          </tr></thead><tbody>${attRows}</tbody></table>` : '<p style="color:var(--muted); font-size:12px;">لا يوجد حضور مسجل</p>'}
+      </div>
+      <div style="margin-bottom:16px;">
+        <div style="font-size:13px; font-weight:700; color:var(--blue); margin-bottom:6px;">📊 الدرجات</div>
+        ${quizRows ? `<table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+          <thead><tr style="background:var(--paper2);">
+            <th style="padding:7px 8px; text-align:right; font-size:12px;">الامتحان</th>
+            <th style="padding:7px 8px; text-align:center; font-size:12px;">الدرجة / النسبة</th>
+          </tr></thead><tbody>${quizRows}</tbody></table>` : '<p style="color:var(--muted); font-size:12px;">لا توجد درجات مسجلة</p>'}
+      </div>
+      <div style="margin-bottom:16px;">
+        <div style="font-size:13px; font-weight:700; color:var(--blue); margin-bottom:6px;">💰 سجل الدفعات</div>
+        ${payRows ? `<table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+          <thead><tr style="background:var(--paper2);">
+            <th style="padding:7px 8px; text-align:right; font-size:12px;">الشهر</th>
+            <th style="padding:7px 8px; text-align:center; font-size:12px;">تاريخ الدفع</th>
+            <th style="padding:7px 8px; text-align:center; font-size:12px;">المبلغ</th>
+          </tr></thead><tbody>${payRows}</tbody></table>` : '<p style="color:var(--muted); font-size:12px;">لا توجد دفعات مسجلة</p>'}
+      </div>
+      <div class="field" style="margin-bottom:10px;">
+        <label style="font-size:12px; color:var(--muted);">رسالة ختامية (اختيارية)</label>
+        <textarea id="followupClosingMsg_${studentId}" rows="2" placeholder="مثال: نتمنى التوفيق والنجاح لطفلكم 🌟"
+          style="width:100%; padding:10px; border-radius:10px; border:1.5px solid var(--line); background:var(--paper); color:var(--ink); font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        <button class="btn gold block" onclick="printFollowupPDF('${studentId}')">🖨️ PDF / طباعة</button>
+        <button class="btn block" style="background:var(--green); color:#fff;" onclick="sendFollowupWhatsApp('${studentId}')">💬 WhatsApp ولي الأمر</button>
+      </div>
     </div>
   `;
 }
 
-function sendFollowupWhatsApp() {
-  const studentId = document.getElementById('followupStudentId').value;
+function sendFollowupWhatsApp(studentId) {
   const s = state.students.find(x=>x.id===studentId);
   if (!s) return;
   const parentPhone = normalizePhone(s.parentPhone);
@@ -1338,11 +1400,13 @@ function sendFollowupWhatsApp() {
     const [yr,mo]=m.split('-'); return `• ${moNames[Number(mo)]} ${yr}: ${c} حصة`;
   }).join('\n');
 
-  // درجات
+  // درجات (مع النسبة والتقدير)
   const gradeLines = state.quizzes.map(q => {
     const res = state.results.find(r=>r.quizId===q.id && r.studentId===studentId);
-    const score = res ? res.score + (q.total?' / '+q.total:'') : 'لم يُسجَّل';
-    return `• ${q.title}: ${score}`;
+    if (!res) return `• ${q.title}: لم يُسجَّل`;
+    const gi = q.total ? getGradeInfo(res.score, q.total) : null;
+    const score = res.score + (q.total?' / '+q.total:'');
+    return `• ${q.title}: ${score}${gi ? ` (${gi.pct}% — ${gi.label})` : ''}`;
   }).join('\n');
 
   // دفعات
@@ -1352,7 +1416,7 @@ function sendFollowupWhatsApp() {
     return `• ${p.month||''} — ${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} — ${p.amount||'—'} ج.م`;
   }).join('\n');
 
-  const closingMsg = document.getElementById('followupClosingMsg').value.trim() ||
+  const closingMsg = (document.getElementById('followupClosingMsg_' + studentId)?.value || '').trim() ||
     'نتمنى التوفيق والنجاح لطفلكم 🌟';
 
   const msg = `السلام عليكم ورحمة الله،
@@ -1374,8 +1438,7 @@ ${closingMsg}
   window.open(`https://wa.me/${parentPhone}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 
-function printFollowupPDF() {
-  const studentId = document.getElementById('followupStudentId').value;
+function printFollowupPDF(studentId) {
   const s = state.students.find(x=>x.id===studentId);
   if (!s) return;
 
@@ -1388,11 +1451,13 @@ function printFollowupPDF() {
     return `<tr><td>${moNames[Number(mo)]} ${yr}</td><td style="text-align:center; color:#2d9a5b; font-weight:700;">${c} حصة ✅</td></tr>`;
   }).join('');
 
+  const printColors = { 'var(--green)':'#2d9a5b', 'var(--blue)':'#4d8aff', 'var(--orange)':'#e67e22', 'var(--red)':'#c0392b' };
   const quizRows = state.quizzes.map(q => {
     const res = state.results.find(r=>r.quizId===q.id && r.studentId===studentId);
     const score = res ? res.score+(q.total?' / '+q.total:'') : '—';
-    const color = res ? (q.total && res.score < q.total*0.5 ? '#c0392b' : '#2d9a5b') : '#888';
-    return `<tr><td>${q.title}</td><td style="text-align:center; font-weight:700; color:${color};">${score}</td></tr>`;
+    const gi = res && q.total ? getGradeInfo(res.score, q.total) : null;
+    const color = gi ? (printColors[gi.color]||'#2d9a5b') : (res ? '#2d9a5b' : '#888');
+    return `<tr><td>${q.title}</td><td style="text-align:center; font-weight:700; color:${color};">${score}</td><td style="text-align:center;">${gi ? gi.pct+'% — '+gi.label : '—'}</td></tr>`;
   }).join('');
 
   const pays = state.payments.filter(p=>p.studentId===studentId).sort((a,b)=>b.createdAt-a.createdAt);
@@ -1401,7 +1466,7 @@ function printFollowupPDF() {
     return `<tr><td>${p.month||'—'}</td><td style="text-align:center;">${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}</td><td style="text-align:center; font-weight:700; color:#2d9a5b;">${p.amount||'—'} ج.م</td></tr>`;
   }).join('');
 
-  const closingMsg = document.getElementById('followupClosingMsg').value.trim() || 'نتمنى التوفيق والنجاح 🌟';
+  const closingMsg = (document.getElementById('followupClosingMsg_' + studentId)?.value || '').trim() || 'نتمنى التوفيق والنجاح 🌟';
   const todayStr = new Date().toLocaleDateString('ar-EG');
 
   const html = `<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8">
@@ -1426,8 +1491,8 @@ function printFollowupPDF() {
   <tbody>${attRows || '<tr><td colspan="2" style="text-align:center; color:#888;">لا يوجد حضور مسجل</td></tr>'}</tbody></table>
 
   <h2>📊 الدرجات</h2>
-  <table><thead><tr><th>الامتحان</th><th style="text-align:center;">الدرجة</th></tr></thead>
-  <tbody>${quizRows || '<tr><td colspan="2" style="text-align:center; color:#888;">لا توجد درجات</td></tr>'}</tbody></table>
+  <table><thead><tr><th>الامتحان</th><th style="text-align:center;">الدرجة</th><th style="text-align:center;">النسبة / التقدير</th></tr></thead>
+  <tbody>${quizRows || '<tr><td colspan="3" style="text-align:center; color:#888;">لا توجد درجات</td></tr>'}</tbody></table>
 
   <h2>💰 سجل الدفعات</h2>
   <table><thead><tr><th>الشهر</th><th style="text-align:center;">تاريخ الدفع</th><th style="text-align:center;">المبلغ</th></tr></thead>
@@ -1560,6 +1625,107 @@ function loadDefaultFeesUI() {
   const elNew = document.getElementById('defaultFeeNew');
   if (elOld) elOld.value = f.old || 300;
   if (elNew) elNew.value = f.new || 300;
+}
+
+/* =========================================================
+   تأمين صفحة الدفعات بكلمة سر
+   ========================================================= */
+let paymentsUnlocked = false;
+
+async function sha256Hex(text) {
+  const enc = new TextEncoder().encode(text);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+function getPaymentsPasswordHash() {
+  return localStorage.getItem('sentry_payments_pwhash') || '';
+}
+
+async function savePaymentsPassword() {
+  const inputEl = document.getElementById('paymentsPwSetInput');
+  const val = inputEl.value;
+  if (!val.trim()) {
+    // الحقل فاضي: مفيش أي فيدباك ظاهر هنا عمداً
+    registerSecretResetTap();
+    return;
+  }
+  if (getPaymentsPasswordHash()) {
+    // فيه كلمة سر متحطة بالفعل — مينفعش تتغيّر مباشرة، لازم تتلغي الأول
+    showToast('⚠️ فيه كلمة سر متحطة بالفعل. لازم تلغيها الأول قبل ما تحط واحدة جديدة');
+    inputEl.value = '';
+    return;
+  }
+  const hash = await sha256Hex(val.trim());
+  localStorage.setItem('sentry_payments_pwhash', hash);
+  showToast('🔒 تم حفظ كلمة سر الدفعات');
+  inputEl.value = '';
+  paymentsUnlocked = false;
+  loadPaymentsPasswordStatusUI();
+}
+
+/* تصفير سري لكلمة سر الدفعات: دوس على "حفظ" ٧ مرات متتالية بسرعة
+   والخانة فاضية. لو حصل تأخير بين ضغطتين، العداد يترجع صفر ويبدأ من الأول. */
+let secretResetTapCount = 0;
+let secretResetTapTimer = null;
+const SECRET_RESET_TAP_WINDOW = 600; // ملل ثانية بين كل ضغطة والتانية
+
+function registerSecretResetTap() {
+  secretResetTapCount++;
+  clearTimeout(secretResetTapTimer);
+  secretResetTapTimer = setTimeout(() => { secretResetTapCount = 0; }, SECRET_RESET_TAP_WINDOW);
+  if (secretResetTapCount >= 7) {
+    secretResetTapCount = 0;
+    clearTimeout(secretResetTapTimer);
+    localStorage.removeItem('sentry_payments_pwhash');
+    paymentsUnlocked = false;
+    loadPaymentsPasswordStatusUI();
+    showToast('🔓 تم إلغاء كلمة سر الدفعات');
+  }
+}
+
+function loadPaymentsPasswordStatusUI() {
+  const el = document.getElementById('paymentsPwStatus');
+  if (!el) return;
+  el.textContent = getPaymentsPasswordHash()
+    ? '🔒 صفحة الدفعات محمية بكلمة سر حالياً.'
+    : 'لسه مفيش كلمة سر متحطة — أي حد يقدر يفتح صفحة الدفعات.';
+}
+
+/* بتتنادى كل ما المستخدم يدخل صفحة الدفعات */
+function guardPaymentsPage() {
+  const lock = document.getElementById('paymentsLockScreen');
+  const content = document.getElementById('paymentsContentWrap');
+  const hash = getPaymentsPasswordHash();
+  if (!hash || paymentsUnlocked) {
+    lock.style.display = 'none';
+    content.style.display = 'block';
+    renderPayments();
+  } else {
+    lock.style.display = 'block';
+    content.style.display = 'none';
+    const inp = document.getElementById('paymentsPwInput');
+    const err = document.getElementById('paymentsPwError');
+    if (inp) inp.value = '';
+    if (err) err.textContent = '';
+    setTimeout(() => inp && inp.focus(), 50);
+  }
+}
+
+async function unlockPayments() {
+  const inp = document.getElementById('paymentsPwInput');
+  const err = document.getElementById('paymentsPwError');
+  const val = inp.value;
+  const hash = await sha256Hex(val);
+  if (hash === getPaymentsPasswordHash()) {
+    paymentsUnlocked = true;
+    err.textContent = '';
+    guardPaymentsPage();
+  } else {
+    err.textContent = '⚠️ كلمة السر غلط';
+    inp.value = '';
+    inp.focus();
+  }
 }
 
 function normalizePhoneLocal(phone) {
@@ -1698,6 +1864,40 @@ function whatsappParentAbsent(studentId) {
   window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 
+/* رسالة جماعية لكل أولياء أمور الغائبين في اليوم/المجموعة المختارة حالياً
+   في صفحة الحضور. بتفتح شات واتساب منفصل لكل ولي أمر عنده رقم مسجل. */
+function sendBulkAbsentWhatsApp() {
+  const date = document.getElementById('attDateInput').value || todayStr();
+  const groupFilter = document.getElementById('attGroupFilter').value || 'all';
+  let students = state.students.slice();
+  if (groupFilter !== 'all') students = students.filter(s => s.groupId === groupFilter);
+
+  const presentIds = new Set(state.attendance.filter(a => a.date === date).map(a => a.studentId));
+  const absentees = students.filter(s => !presentIds.has(s.id));
+
+  if (absentees.length === 0) { showToast('🎉 مفيش غائبين في التاريخ ده'); return; }
+
+  const withPhone = absentees.filter(s => normalizePhone(s.parentPhone));
+  const withoutPhone = absentees.length - withPhone.length;
+
+  if (withPhone.length === 0) { showToast('⚠️ مفيش أرقام أولياء أمور مسجلة للغائبين دول'); return; }
+
+  const ok = confirm(
+    `هيتفتح ${withPhone.length} محادثة واتساب لأولياء أمور الغائبين (كل واحدة في تبويب/شات منفصل)، وهتحتاج تدوس "إرسال" بنفسك في كل واحدة.\n` +
+    (withoutPhone ? `\n⚠️ ${withoutPhone} من الغائبين مفيش رقم ولي أمر مسجل ليهم.\n` : '') +
+    `\nتحب تكمل؟`
+  );
+  if (!ok) return;
+
+  withPhone.forEach(s => {
+    const phone = normalizePhone(s.parentPhone);
+    const msg = fillTemplate(getMessageTemplates().parentAbsent, s);
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+  });
+
+  showToast(`📨 تم فتح ${withPhone.length} محادثة واتساب${withoutPhone ? ` (و${withoutPhone} من غير رقم)` : ''}`);
+}
+
 /* =========================================================
    STARTUP
    ========================================================= */
@@ -1735,6 +1935,7 @@ async function startApp() {
   renderDashboard();
   renderAttendancePage();
   loadMessageTemplatesUI();
+  loadPaymentsPasswordStatusUI();
   loadDefaultFeesUI();
 
   document.getElementById('todayDate').textContent = new Date().toLocaleDateString('ar-EG', {weekday:'long', year:'numeric', month:'long', day:'numeric'});

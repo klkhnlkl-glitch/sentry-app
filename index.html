@@ -474,12 +474,34 @@ body{padding-bottom:80px;}
       <select id="attDateInput" style="padding:9px;border-radius:10px;border:1px solid var(--line);background:var(--navy-light);color:var(--ink);font-family:inherit;"></select>
       <select id="attGroupFilter" onchange="renderAttendanceList()" style="padding:9px;border-radius:10px;border:1px solid var(--line);background:var(--navy-light);color:var(--ink);font-family:inherit;"></select>
     </div>
+    <div class="row2" style="margin-bottom:12px;">
+      <button id="absentOnlyBtn" onclick="toggleAbsentOnlyFilter()" class="btn outline" style="border-color:var(--red); color:var(--red);">
+        📵 عرض الغائبين فقط
+      </button>
+      <button onclick="sendBulkAbsentWhatsApp()" class="btn" style="background:var(--green); color:#fff;">
+        📢 رسالة جماعية للغائبين
+      </button>
+    </div>
     <div id="attendanceList"></div>
   </div>
 </div>
 
 <!-- ===================== PAYMENTS ===================== -->
 <div class="page" id="page-payments">
+
+  <!-- شاشة القفل بالباسورد -->
+  <div class="card" id="paymentsLockScreen" style="text-align:center; padding:34px 18px; display:none;">
+    <div style="font-size:44px; margin-bottom:10px;">🔒</div>
+    <h3 style="justify-content:center; margin-bottom:6px;">صفحة الدفعات مقفولة</h3>
+    <p style="color:var(--muted); font-size:12.5px; margin:0 0 16px;">اكتب كلمة السر عشان تظهر الدفعات والمصروفات</p>
+    <input type="password" id="paymentsPwInput" placeholder="كلمة السر" autocomplete="off"
+      style="width:100%; max-width:260px; padding:12px 14px; border-radius:11px; border:1.5px solid var(--line); background:var(--navy-light); color:var(--ink); font-size:16px; font-family:inherit; text-align:center; margin-bottom:12px;"
+      onkeydown="if(event.key==='Enter') unlockPayments()">
+    <div id="paymentsPwError" style="color:var(--red); font-size:12px; min-height:16px; margin-bottom:6px;"></div>
+    <button class="btn gold block" style="max-width:260px; margin:0 auto;" onclick="unlockPayments()">🔓 دخول</button>
+  </div>
+
+  <div id="paymentsContentWrap" style="display:none;">
   <div class="tabs">
     <button class="active" onclick="setPayTab('income')" id="payTabIncome">دفعات الطلاب</button>
     <button onclick="setPayTab('expense')" id="payTabExpense">مصروفات السنتر</button>
@@ -515,7 +537,9 @@ body{padding-bottom:80px;}
       <div id="expensesLog"><div class="empty"><div class="ic">📭</div><p>لا توجد مصروفات مسجلة</p></div></div>
     </div>
   </div>
+  </div>
 </div>
+
 
 <!-- ===================== QUIZZES ===================== -->
 <div class="page" id="page-quizzes">
@@ -540,27 +564,26 @@ body{padding-bottom:80px;}
 <div class="page" id="page-followup">
   <div class="card">
     <h3><span class="dot"></span> المتابعة — اختر طالب</h3>
+    <div class="searchbar">
+      <span>🔍</span>
+      <input type="text" id="followupSearch" placeholder="ابحث بالاسم أو كود الطالب..." oninput="renderFollowupPage()">
+    </div>
     <div id="followupStudentList"></div>
-  </div>
-  <div class="card" id="followupDetailBox" style="display:none;">
-    <h3><span class="dot"></span> تقرير: <span id="followupStudentName"></span></h3>
-    <input type="hidden" id="followupStudentId">
-    <div id="followupDetailContent"></div>
-    <hr class="sep">
-    <div class="field" style="margin-bottom:10px;">
-      <label style="font-size:12px; color:var(--muted);">رسالة ختامية (اختيارية)</label>
-      <textarea id="followupClosingMsg" rows="2" placeholder="مثال: نتمنى التوفيق والنجاح لطفلكم 🌟"
-        style="width:100%; padding:10px; border-radius:10px; border:1.5px solid var(--line); background:var(--paper); color:var(--ink); font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
-    </div>
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-      <button class="btn gold block" onclick="printFollowupPDF()">🖨️ PDF / طباعة</button>
-      <button class="btn block" style="background:var(--green); color:#fff;" onclick="sendFollowupWhatsApp()">💬 WhatsApp ولي الأمر</button>
-    </div>
   </div>
 </div>
 
 <!-- ===================== SETTINGS / BACKUP ===================== -->
 <div class="page" id="page-settings">
+  <div class="card" style="margin-top: 0; padding: 15px;">
+    <h3>🔒 تأمين صفحة الدفعات</h3>
+    <p style="color:var(--muted); font-size:12px; margin:0 0 12px;" id="paymentsPwStatus">لسه مفيش كلمة سر متحطة — أي حد يقدر يفتح صفحة الدفعات.</p>
+    <div class="field">
+      <label>كلمة سر جديدة</label>
+      <input type="password" id="paymentsPwSetInput" placeholder="اكتب كلمة السر" autocomplete="off">
+    </div>
+    <button class="btn gold block" onclick="savePaymentsPassword()">💾 حفظ كلمة السر</button>
+  </div>
+
   <div class="card" style="margin-top: 0; padding: 15px;">
     <h3>💰 إعدادات الأسعار الافتراضية</h3>
     <p style="color:var(--muted); font-size:12px; margin:0 0 12px;">السعر ده بيتحط تلقائي لما تضيف طالب جديد — تقدر تعدله لكل طالب على حدة.</p>

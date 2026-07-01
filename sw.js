@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sentry-app-v7';
+const CACHE_NAME = 'sentry-app-v11';
 const ASSETS = [
   './',
   './index.html',
