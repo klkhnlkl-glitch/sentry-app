@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#1B2A4A">
-<title>سنتري - نظام إدارة السنتر</title>
+<title id="pageTitleTag">سنتري - نظام إدارة السنتر</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -346,7 +346,7 @@ body{padding-bottom:80px;}
 <header>
   <button class="hamburger" onclick="openDrawer()">☰</button>
   <div class="greg-date" id="todayDate"></div>
-  <h1><span class="mark">س</span> My System</h1>
+  <h1><span class="mark" id="markLetter1">س</span> <span id="appTitleText">My System</span></h1>
   <div class="sub" id="centerNameSub">My system— Eng.Mohamed Ashraf.</div>
 </header>
 
@@ -474,6 +474,10 @@ body{padding-bottom:80px;}
       <select id="attDateInput" style="padding:9px;border-radius:10px;border:1px solid var(--line);background:var(--navy-light);color:var(--ink);font-family:inherit;"></select>
       <select id="attGroupFilter" onchange="renderAttendanceList()" style="padding:9px;border-radius:10px;border:1px solid var(--line);background:var(--navy-light);color:var(--ink);font-family:inherit;"></select>
     </div>
+    <div class="searchbar" style="margin-bottom:10px;">
+      <span>🔍</span>
+      <input type="text" id="attSearch" placeholder="بحث بالاسم أو الكود..." oninput="renderAttendanceList()">
+    </div>
     <div class="row2" style="margin-bottom:12px;">
       <button id="absentOnlyBtn" onclick="toggleAbsentOnlyFilter()" class="btn outline" style="border-color:var(--red); color:var(--red);">
         📵 عرض الغائبين فقط
@@ -519,6 +523,10 @@ body{padding-bottom:80px;}
       <h3><span class="dot"></span> حالة الدفع للطلاب
         <button onclick="openExportPanel('payments')" style="margin-right:auto; background:linear-gradient(135deg,var(--blue),var(--purple)); color:#fff; border:none; border-radius:9px; padding:6px 12px; font-size:12px; font-weight:700; font-family:inherit; cursor:pointer;">📤 تصدير</button>
       </h3>
+      <div class="searchbar" style="margin-bottom:10px;">
+        <span>🔍</span>
+        <input type="text" id="paymentsSearch" placeholder="بحث بالاسم أو الكود..." oninput="renderPayments()">
+      </div>
       <div id="paymentsList"></div>
     </div>
     <div class="card">
@@ -553,9 +561,17 @@ body{padding-bottom:80px;}
       <button onclick="openExportPanel('quizzes')" style="background:linear-gradient(135deg,var(--blue),var(--purple)); color:#fff; border:none; border-radius:9px; padding:6px 12px; font-size:12px; font-weight:700; font-family:inherit; cursor:pointer;">📤 تصدير</button>
     </div>
     <div style="font-size:13px; font-weight:600; color:var(--muted); margin-bottom:8px;">📝 رصد درجات الطلاب</div>
+    <div class="searchbar" style="margin-bottom:10px;">
+      <span>🔍</span>
+      <input type="text" id="gradeEntrySearch" placeholder="بحث بالاسم أو الكود..." oninput="renderBulkGradeEntry()">
+    </div>
     <div id="bulkGradeEntryBox"></div>
     <hr class="sep">
     <h3><span class="dot"></span> ترتيب النتائج</h3>
+    <div class="searchbar" style="margin-bottom:10px;">
+      <span>🔍</span>
+      <input type="text" id="resultsSearch" placeholder="بحث بالاسم أو الكود..." oninput="renderQuizResultsList()">
+    </div>
     <div id="quizResultsList"></div>
   </div>
 </div>
@@ -627,10 +643,10 @@ body{padding-bottom:80px;}
 <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
 <div class="drawer" id="drawer">
   <div class="drawer-head">
-    <div class="mark">س</div>
+    <div class="mark" id="markLetter2">س</div>
     <div>
-      <h2>My system</h2>
-      <div class="sub">Eng.Mohamed Ashraf</div>
+      <h2 id="drawerAppName">My system</h2>
+      <div class="sub" id="drawerTeacherName">Eng.Mohamed Ashraf</div>
     </div>
   </div>
   <button class="drawer-item active" onclick="goPage('attendance')" id="nav-attendance"><span class="ic">✅</span>الحضور</button>
@@ -766,11 +782,12 @@ body{padding-bottom:80px;}
 </div>
 
 <div class="footer-credit">
-  <b>Eng. Mohamed Ashraf</b>
-  <span class="nums">01020614529 — 01158668841</span>
+  <b id="footerTeacherName">Eng. Mohamed Ashraf</b>
+  <span class="nums" id="footerPhones">01020614529 — 01158668841</span>
 </div>
 
 <div class="toast" id="toast"></div>
+<script src="config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

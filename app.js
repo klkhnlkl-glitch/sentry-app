@@ -272,7 +272,7 @@ function setGroupFilter(id) {
 function renderStudents() {
   renderGroupFilters();
   const search = document.getElementById('studentSearch').value.trim().toLowerCase();
-  let list = state.students.slice();
+  let list = state.students.slice().sort((a,b)=> (a.code||'').localeCompare(b.code||'', undefined, {numeric:true}));
   if (activeGroupFilter !== 'all') list = list.filter(s => s.groupId === activeGroupFilter);
   if (search) list = list.filter(s =>
     s.name.toLowerCase().includes(search) ||
@@ -514,8 +514,12 @@ function toggleAbsentOnlyFilter() {
 function renderAttendanceList() {
   const date = document.getElementById('attDateInput').value || todayStr();
   const groupFilter = document.getElementById('attGroupFilter').value || 'all';
-  let students = state.students.slice();
+  const search = (document.getElementById('attSearch')?.value || '').trim().toLowerCase();
+  let students = state.students.slice().sort((a,b)=> (a.code||'').localeCompare(b.code||'', undefined, {numeric:true}));
   if (groupFilter !== 'all') students = students.filter(s => s.groupId === groupFilter);
+  if (search) students = students.filter(s =>
+    (s.name||'').toLowerCase().includes(search) || (s.code||'').toLowerCase().includes(search)
+  );
 
   const presentIds = new Set(state.attendance.filter(a => a.date === date).map(a => a.studentId));
 
@@ -525,7 +529,7 @@ function renderAttendanceList() {
   if (students.length === 0) {
     box.innerHTML = showAbsentOnly
       ? `<div class="empty"><div class="ic">🎉</div><p>مفيش غائبين — كل الطلاب حاضرين!</p></div>`
-      : `<div class="empty"><div class="ic">👥</div><p>لا يوجد طلاب</p></div>`;
+      : `<div class="empty"><div class="ic">👥</div><p>لا يوجد طلاب${search?' مطابقين للبحث':''}</p></div>`;
     return;
   }
   const month = thisMonthStr();
@@ -902,16 +906,25 @@ function renderPayments() {
   if (payTab === 'income') {
     let paid = 0, due = 0;
     const box = document.getElementById('paymentsList');
-    if (state.students.length === 0) {
-      box.innerHTML = `<div class="empty"><div class="ic">👥</div><p>لا يوجد طلاب</p></div>`;
+    const search = (document.getElementById('paymentsSearch')?.value || '').trim().toLowerCase();
+    let payStudents = state.students.slice().sort((a,b)=> (a.code||'').localeCompare(b.code||'', undefined, {numeric:true}));
+    // نحسب الإجمالي/المتأخرات على كل الطلاب، مش بس نتيجة البحث
+    state.students.forEach(s => {
+      const pay = state.payments.find(p => p.studentId === s.id && (p.month||'').slice(0,7) === month);
+      if (pay) paid += Number(pay.amount||0); else due += Number(s.fee||0);
+    });
+    if (search) payStudents = payStudents.filter(s =>
+      (s.name||'').toLowerCase().includes(search) || (s.code||'').toLowerCase().includes(search)
+    );
+    if (payStudents.length === 0) {
+      box.innerHTML = `<div class="empty"><div class="ic">👥</div><p>لا يوجد طلاب${search?' مطابقين للبحث':''}</p></div>`;
     } else {
-      box.innerHTML = state.students.map(s => {
+      box.innerHTML = payStudents.map(s => {
         const pay = state.payments.find(p => p.studentId === s.id && (p.month||'').slice(0,7) === month);
         const status = pay ? 'paid' : 'due';
-        if (pay) paid += Number(pay.amount||0); else due += Number(s.fee||0);
         return `<div class="list-item">
           <div class="info"><div class="avatar">${initials(s.name)}</div>
-            <div><div class="li-name">${escapeHtml(s.name)}</div><div class="li-sub">${s.fee||0} ج.م / شهريًا</div></div>
+            <div><div class="li-name">${escapeHtml(s.name)}</div><div class="li-sub">${escapeHtml(s.code||'')} · ${s.fee||0} ج.م / شهريًا</div></div>
           </div>
           ${status==='paid'
             ? `<div style="display:flex; gap:6px; align-items:center;">
@@ -1187,8 +1200,12 @@ function renderBulkGradeEntry() {
   const quiz = state.quizzes.find(q=>q.id===currentQuizId);
   const box = document.getElementById('bulkGradeEntryBox');
   if (!box) return;
-  const students = state.students.slice().sort((a,b)=> (a.code||'').localeCompare(b.code||''));
-  if (students.length === 0) { box.innerHTML = `<p style="color:var(--muted); font-size:13px;">لا يوجد طلاب مسجلين</p>`; return; }
+  const search = (document.getElementById('gradeEntrySearch')?.value || '').trim().toLowerCase();
+  let students = state.students.slice().sort((a,b)=> (a.code||'').localeCompare(b.code||'', undefined, {numeric:true}));
+  if (search) students = students.filter(s =>
+    (s.name||'').toLowerCase().includes(search) || (s.code||'').toLowerCase().includes(search)
+  );
+  if (students.length === 0) { box.innerHTML = `<p style="color:var(--muted); font-size:13px;">لا يوجد طلاب${search?' مطابقين للبحث':''}</p>`; return; }
 
   box.innerHTML = students.map(s => {
     const res = state.results.find(r=>r.quizId===currentQuizId && r.studentId===s.id);
@@ -1234,11 +1251,16 @@ async function saveOneGrade(studentId) {
 
 function renderQuizResultsList() {
   const quiz = state.quizzes.find(q=>q.id===currentQuizId);
-  const results = state.results.filter(r=>r.quizId===currentQuizId).slice().sort((a,b)=>b.score-a.score);
+  const search = (document.getElementById('resultsSearch')?.value || '').trim().toLowerCase();
+  let results = state.results.filter(r=>r.quizId===currentQuizId).slice().sort((a,b)=>b.score-a.score);
+  if (search) results = results.filter(r => {
+    const st = state.students.find(s=>s.id===r.studentId);
+    return st && ((st.name||'').toLowerCase().includes(search) || (st.code||'').toLowerCase().includes(search));
+  });
   const box = document.getElementById('quizResultsList');
   if (!box) return;
   if (results.length===0) {
-    box.innerHTML = `<div class="empty"><div class="ic">📊</div><p>لسه مفيش درجات مسجلة</p></div>`;
+    box.innerHTML = `<div class="empty"><div class="ic">📊</div><p>${search?'لا يوجد نتائج مطابقة للبحث':'لسه مفيش درجات مسجلة'}</p></div>`;
     return;
   }
   box.innerHTML = results.map((r,idx)=>{
@@ -1251,10 +1273,10 @@ function renderQuizResultsList() {
     const giText = gi ? ` (${gi.pct}% — ${gi.label})` : '';
     const waMsg = `مرحباً ولي أمر ${st?.name||''}،
 نتيجة ${quizName}: ${r.score}${total} درجة${giText} 📊
-من سنتري — نظام إدارة السنتر`;
+من ${CENTER_CONFIG.appName} — نظام إدارة الدرس`;
     const waStu = `أهلاً ${st?.name||''}،
 نتيجتك في ${quizName}: ${r.score}${total} درجة${giText} 📊
-من سنتري`;
+من ${CENTER_CONFIG.appName}`;
     return `<div class="list-item" style="gap:8px;">
       <div style="width:28px; height:28px; border-radius:50%; background:var(--blue); color:#fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; flex-shrink:0;">${idx+1}</div>
       <div class="info" style="flex:1;"><div class="li-name">${escapeHtml(st?st.name:'-')}</div>${gi?`<div class="li-sub" style="color:${gi.color}; font-weight:700;">${gi.pct}% · ${gi.label}</div>`:''}</div>
@@ -1274,7 +1296,7 @@ function renderFollowupPage() {
   const box = document.getElementById('followupStudentList');
   if (!box) return;
   const search = (document.getElementById('followupSearch')?.value || '').trim().toLowerCase();
-  let students = state.students.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  let students = state.students.slice().sort((a,b)=> (a.code||'').localeCompare(b.code||'', undefined, {numeric:true}));
   if (search) {
     students = students.filter(s =>
       (s.name||'').toLowerCase().includes(search) ||
@@ -1433,7 +1455,7 @@ ${payLines || 'لا توجد دفعات مسجلة'}
 
 ${closingMsg}
 
-— سنتري، نظام إدارة السنتر`;
+— ${CENTER_CONFIG.appName}، نظام إدارة السنتر`;
 
   window.open(`https://wa.me/${parentPhone}?text=${encodeURIComponent(msg)}`, '_blank');
 }
@@ -1499,7 +1521,7 @@ function printFollowupPDF(studentId) {
   <tbody>${payRows || '<tr><td colspan="3" style="text-align:center; color:#888;">لا توجد دفعات</td></tr>'}</tbody></table>
 
   <div class="closing">${closingMsg}</div>
-  <div class="footer">صادر من سنتري — نظام إدارة السنتر</div>
+  <div class="footer">صادر من ${CENTER_CONFIG.appName} Eng.Mohamed Ashraf</div>
   <script>window.onload=()=>{ window.print(); }<\/script>
   </body></html>`;
 
@@ -1905,6 +1927,27 @@ window.addEventListener('load', () => {
   startApp();
 });
 
+/* بيطبّق بيانات المعلم/السنتر من config.js على الواجهة كلها.
+   عشان يبقى ملف config.js هو المكان الوحيد اللي محتاج تتعدّل فيه
+   البيانات لو التطبيق اتكرر لمعلم تاني. */
+function applyBranding() {
+  const cfg = (typeof CENTER_CONFIG !== 'undefined') ? CENTER_CONFIG : null;
+  if (!cfg) return;
+
+  document.title = `${cfg.appName} - نظام إدارة السنتر`;
+
+  const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  set('appTitleText', cfg.systemLabel);
+  set('centerNameSub', cfg.centerTagline);
+  set('drawerAppName', cfg.systemLabel);
+  set('drawerTeacherName', cfg.teacherNameShort);
+  set('footerTeacherName', cfg.teacherName);
+  set('footerPhones', (cfg.phones || []).join(' — '));
+  set('markLetter1', cfg.markLetter);
+  set('markLetter2', cfg.markLetter);
+}
+applyBranding();
+
 async function startApp() {
   try {
     await openDB();
@@ -2178,6 +2221,9 @@ async function exportQuizzes(format) {
    ========================================================= */
 function printTable(title, cols, rowsData, summaryLines=[]) {
   const now = new Date().toLocaleDateString('ar-EG', {year:'numeric',month:'long',day:'numeric'});
+  const _logoName = CENTER_CONFIG.appName || 'سنتري';
+  const _logoHalf = Math.ceil(_logoName.length/2);
+  const logoHtml = `${_logoName.slice(0,_logoHalf)}<span>${_logoName.slice(_logoHalf)}</span>`;
   const tableRows = rowsData.map(row =>
     `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`
   ).join('');
@@ -2219,10 +2265,10 @@ function printTable(title, cols, rowsData, summaryLines=[]) {
 </style>
 </head><body>
 <div class="header">
-  <div class="logo">سن<span>تري</span></div>
+  <div class="logo">${logoHtml}</div>
   <div class="meta">
-    <div><b>Eng. Mohamed Ashraf</b></div>
-    <div>01020614529 — 01158668841</div>
+    <div><b>${CENTER_CONFIG.teacherName}</b></div>
+    <div>${(CENTER_CONFIG.phones||[]).join(' — ')}</div>
     <div>${now}</div>
   </div>
 </div>
@@ -2234,7 +2280,7 @@ function printTable(title, cols, rowsData, summaryLines=[]) {
 </table>
 ${summaryHtml}
 <div class="footer">
-  <span>سنتري — نظام إدارة السنتر</span>
+  <span>${CENTER_CONFIG.appName} — نظام إدارة السنتر</span>
   <span>${now}</span>
 </div>
 </body></html>`;
