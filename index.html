@@ -243,6 +243,21 @@ header .sub{font-size:12.5px;opacity:.75;margin-top:4px;letter-spacing:.3px; tex
 @keyframes slideUp{from{transform:translateY(30px); opacity:0;} to{transform:translateY(0); opacity:1;}}
 .modal-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;}
 .modal-head h3{margin:0; color:#fff; font-size:17px;}
+
+/* Modal بجزء علوي ثابت (Sticky) وجزء سفلي بيتمرر لوحده */
+.modal.modal-sticky{display:flex; flex-direction:column; padding:0; overflow:hidden;}
+.modal.modal-sticky .modal-head{
+  flex:0 0 auto; margin-bottom:0; padding:18px 16px 12px;
+  background:var(--cream); position:relative; z-index:2;
+}
+.modal.modal-sticky .modal-fixed-top{
+  flex:0 0 auto; padding:0 16px 12px; background:var(--cream);
+  border-bottom:1.5px solid var(--line); position:relative; z-index:2;
+  box-shadow:0 4px 10px rgba(0,0,0,.04);
+}
+.modal.modal-sticky .modal-scroll{
+  flex:1 1 auto; overflow-y:auto; padding:14px 16px calc(16px + env(safe-area-inset-bottom));
+}
 .close-x{
   width:32px;height:32px; border-radius:50%; border:1px solid var(--line); background:var(--paper);
   color:var(--ink); font-size:16px; box-shadow:var(--shadow); font-weight:700;
@@ -743,6 +758,31 @@ body{padding-bottom:80px;}
     </div>
     <div class="field"><label>ملاحظات</label><input type="text" id="payNote" placeholder="اختياري"></div>
     <button class="btn gold block" onclick="savePayment()">حفظ الدفعة</button>
+  </div>
+</div>
+
+<div class="overlay" id="paymentHistoryModal">
+  <div class="modal modal-sticky">
+    <div class="modal-head">
+      <h3 id="phName">—</h3>
+      <button class="close-x" onclick="closeModal('paymentHistoryModal')">✕</button>
+    </div>
+    <div class="modal-fixed-top">
+      <div class="li-sub" id="phCode" style="margin-bottom:8px;">—</div>
+      <div class="row2">
+        <div class="card" style="box-shadow:none; border:1.5px solid var(--line); text-align:center; padding:10px;">
+          <div class="li-sub">إجمالي المدفوع</div>
+          <div id="phTotal" style="font-weight:800; color:var(--blue); font-size:16px; margin-top:2px;">0 ج.م</div>
+        </div>
+        <div class="card" style="box-shadow:none; border:1.5px solid var(--line); text-align:center; padding:10px;">
+          <div class="li-sub">عدد الشهور المدفوعة</div>
+          <div id="phCount" style="font-weight:800; color:var(--blue); font-size:16px; margin-top:2px;">0</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-scroll">
+      <div id="phList"></div>
+    </div>
   </div>
 </div>
 

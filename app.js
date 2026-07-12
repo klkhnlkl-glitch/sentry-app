@@ -923,7 +923,7 @@ function renderPayments() {
         const pay = state.payments.find(p => p.studentId === s.id && (p.month||'').slice(0,7) === month);
         const status = pay ? 'paid' : 'due';
         return `<div class="list-item">
-          <div class="info"><div class="avatar">${initials(s.name)}</div>
+          <div class="info" style="cursor:pointer;" onclick="openPaymentHistoryModal('${s.id}')"><div class="avatar">${initials(s.name)}</div>
             <div><div class="li-name">${escapeHtml(s.name)}</div><div class="li-sub">${escapeHtml(s.code||'')} · ${s.fee||0} ج.م / شهريًا</div></div>
           </div>
           ${status==='paid'
@@ -1019,6 +1019,40 @@ async function cancelPayment(paymentId) {
   renderPayments();
   renderDashboard();
   showToast('تم إلغاء الدفعة');
+}
+
+function openPaymentHistoryModal(studentId) {
+  const st = state.students.find(s => s.id === studentId);
+  if (!st) return;
+
+  document.getElementById('phName').textContent = st.name;
+  document.getElementById('phCode').textContent = `${st.code || ''} · ${st.fee||0} ج.م / شهريًا`;
+
+  const moNames = ['','يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const records = state.payments
+    .filter(p => p.studentId === studentId)
+    .slice()
+    .sort((a,b) => (b.month||'').localeCompare(a.month||''));
+
+  const total = records.reduce((s,p) => s + Number(p.amount||0), 0);
+  document.getElementById('phTotal').textContent = total.toLocaleString() + ' ج.م';
+  document.getElementById('phCount').textContent = records.length;
+
+  const list = document.getElementById('phList');
+  if (records.length === 0) {
+    list.innerHTML = `<div class="empty"><div class="ic">🧾</div><p>لا توجد دفعات مسجلة لهذا الطالب</p></div>`;
+  } else {
+    list.innerHTML = records.map(p => {
+      const [yr, mo] = (p.month||'').split('-');
+      const monthLabel = mo ? `${moNames[Number(mo)]} ${yr}` : (p.month || '—');
+      return `<div class="list-item">
+        <div class="info"><div><div class="li-name">${escapeHtml(monthLabel)}</div><div class="li-sub">${arDate(p.createdAt)}${p.note ? ' · '+escapeHtml(p.note) : ''}</div></div></div>
+        <span class="badge green">${p.amount} ج.م</span>
+      </div>`;
+    }).join('');
+  }
+
+  openModal('paymentHistoryModal');
 }
 
 function openExpenseModal() {
